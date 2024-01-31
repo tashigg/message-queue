@@ -1,0 +1,3 @@
+[net]
+# Without this set, Cargo needs `ssh-agent` to be running to fetch a repo that requires authentication.
+git-fetch-with-cli=true
