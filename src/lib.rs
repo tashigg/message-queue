@@ -1,6 +1,6 @@
+use color_eyre::eyre::eyre;
 use color_eyre::eyre::WrapErr;
 pub use color_eyre::eyre::{Error, Result};
-use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::args::LogFormat;
 
@@ -17,17 +17,17 @@ pub fn bootstrap(log_format: LogFormat) -> Result<()> {
     // Enables capturing backtraces on stable
     color_eyre::install()?;
 
+    let builder = tracing_subscriber::fmt::fmt();
+
     match log_format {
-        LogFormat::Full => {
-            tracing_subscriber::fmt::try_init()?;
-        }
+        LogFormat::Full => builder.try_init().map_err(|e| eyre!(e))?,
         LogFormat::Compact => {
-            tracing_subscriber::fmt().compact().try_init()?;
+            builder.compact().try_init().map_err(|e| eyre!(e))?;
         }
         LogFormat::Pretty => {
-            tracing_subscriber::fmt().pretty().try_init()?;
+            builder.pretty().try_init().map_err(|e| eyre!(e))?;
         }
-        LogFormat::Json => tracing_subscriber::fmt().json().try_init()?,
+        LogFormat::Json => builder.json().try_init().map_err(|e| eyre!(e))?,
     }
 
     Ok(())
