@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           submodules: true
 
@@ -47,7 +47,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
         with:
           submodules: true
 
@@ -80,3 +80,54 @@ jobs:
         with:
           command: clippy
           args: --all-targets -- -D warnings
+
+  tmq-tests:
+    timeout-minutes: 10
+    runs-on: tashi-arc-dind
+    env:
+      NODE_VERSION: v20.11.0
+      SSH_AUTH_SOCK: $SSH_AUTH_SOCK
+    defaults:
+      run:
+          working-directory: tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Add TCE Deploy Key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-agent -a ${SSH_AUTH_SOCK}
+          ssh-add - <<< "${{ secrets.TCE_DEPLOY_KEY }}"
+
+      - name: Build and run the message queue brokers
+        run: ./run.sh
+
+      - name: Smoke test
+        # We expect tests to fail for now
+        continue-on-error: true
+        run: |
+          docker run --net=host hivemq/mqtt-cli test -V5 -a
+
+      # actions/setup-node@v4 doesn't seem to work, I didn't investigate.
+      - name: Install Node and NPM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl
+          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+          . ~/.nvm/nvm.sh
+          nvm install ${NODE_VERSION}
+
+      - name: System tests
+        # We expect tests to fail for now
+        continue-on-error: true
+        run: |
+          . ~/.nvm/nvm.sh
+          nvm use ${NODE_VERSION}
+          npm i
+          npm test
+
+      - name: Stop the message queue
+        if: always()
+        run: docker compose stop

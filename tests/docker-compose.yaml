@@ -1,0 +1,42 @@
+version: '3'
+
+services:
+  # All other brokers re-use the image built by this.
+  broker1:
+    container_name: broker1
+    build:
+      context: ../
+      dockerfile: tests/Dockerfile
+      ssh:
+        - default=${SSH_AUTH_SOCK}
+    image: message-queue-test
+    volumes:
+      - ./dmq:/home/message-queue/dmq
+    ports:
+      - "1883:1883"
+    networks:
+      mesh-app-bridge:
+        aliases:
+        - broker1.example.com
+    entrypoint: target/release/tashi-message-queue
+    command: --secret-key-file dmq/key_0.pem /home/message-queue/dmq/address-book.toml
+
+  broker2:
+    container_name: broker2
+    depends_on:
+      - broker1
+    image: message-queue-test
+    volumes:
+      - ./dmq:/home/message-queue/dmq
+    ports:
+      - "1884:1884"
+    networks:
+      mesh-app-bridge:
+        aliases:
+        - broker2.example.com
+    entrypoint: target/release/tashi-message-queue
+    command: --secret-key-file dmq/key_1.pem /home/message-queue/dmq/address-book.toml
+
+networks:
+  mesh-app-bridge:
+    driver: bridge
