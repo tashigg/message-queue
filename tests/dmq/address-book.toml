@@ -1,0 +1,20 @@
+# key_0.pem
+[[addresses]]
+key = """
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE48VTK97faW815TQKbU/OY/ENsLmw
+9M4D46bz8T/MfSlfErjKW6aMmB+armT2Fg5/5+T53ezUUlwP1ELP/GpUog==
+-----END PUBLIC KEY-----
+"""
+addr = "127.0.0.1:1883"
+
+# key_1.pem
+[[addresses]]
+key = """
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdJH/jhJEJ8zJfnYbu1gXZnSJ7a+g
+K6BC6pGyzxP6tCQ75PX13XDaV9jdhAWvHt+gKOg+0u2nCikv8dfTOe6aTw==
+-----END PUBLIC KEY-----
+"""
+addr = "127.0.0.1:1884"
+

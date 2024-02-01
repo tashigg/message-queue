@@ -3,6 +3,7 @@ name = "tashi-message-queue"
 version = "0.1.0"
 edition = "2021"
 publish = false
+default-run = "tashi-message-queue"
 
 [dependencies.tashi-consensus-engine]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"

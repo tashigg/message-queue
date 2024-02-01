@@ -1,0 +1,11 @@
+{
+    "private": true,
+    "type": "module",
+    "dependencies": {
+        "jest": "^29.7.0",
+        "mqtt": "^5.3.5"
+    },
+    "scripts": {
+        "test": "jest"
+    }
+}

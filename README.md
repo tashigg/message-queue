@@ -14,3 +14,18 @@ GitHub Actions is enabled on the repository. Any value-added changes can be upst
 https://github.com/tashigg/rumqtt
 
 (`git subtree` is gross.)
+
+### Generating a config file
+
+Use the `address-book` command, which supports various modes. One example is using a port range:
+```bash
+cargo run -- address-book from-range 127.0.0.1 1883 1884
+cat dmq/address-book.toml
+```
+
+### Manually generating keys
+Using openssl:
+```bash
+openssl ecparam -name prime256v1 -genkey -noout -out secret.pem
+openssl ec -in secret.pem -pubout -out public.pem
+```
