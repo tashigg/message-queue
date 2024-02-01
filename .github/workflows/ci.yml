@@ -63,7 +63,7 @@ jobs:
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Check
         uses: actions-rs/cargo@v1
