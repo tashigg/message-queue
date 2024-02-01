@@ -54,16 +54,14 @@ jobs:
           components: clippy
 
       - name: Add TCE Deploy Key
-        # FIXME: remove the `apt install` when openssh-client has been added to the arc-runner image
         run: |
-          sudo apt-get update && sudo apt-get install -y openssh-client
           mkdir -p ~/.ssh
           echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
           chmod 400 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
 
       - name: Check
         uses: actions-rs/cargo@v1
