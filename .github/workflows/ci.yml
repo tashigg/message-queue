@@ -1,0 +1,80 @@
+# Reference: https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions
+
+name: TMQ
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release-version:
+        description: Set this to create a draft release, e.g. '0.0.1'. Do not include the 'v' prefix.
+        required: false
+      enable-macOS:
+        type: boolean
+        description: Enable building for macOS. This is always true for release builds.
+        required: false
+      enable-windows:
+        type: boolean
+        description: Enable building for Windows. This is always true for release builds.
+        required: false
+
+jobs:
+  tmq-format:
+    runs-on: tashi-arc
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v2
+
+      - name: Install rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Check rust code formatting
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --check --all
+
+  tmq-check:
+    runs-on: tashi-arc
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v2
+
+      - name: Install rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Add TCE Deploy Key
+        # FIXME: remove the `apt install` when openssh-client has been added to the arc-runner image
+        run: |
+          sudo apt-get update && sudo apt-get install -y openssh-client
+          mkdir -p ~/.ssh
+          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          chmod 400 ~/.ssh/id_ed25519
+          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v1
+
+      - name: Check
+        uses: actions-rs/cargo@v1
+        with:
+          command: check
+          args: --all-targets
+
+      # Deny warnings but don't break `main` when new ones are added
+      - name: Lint
+        if: ${{ github.ref_name != 'main' }}
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --all-targets -- -D warnings
