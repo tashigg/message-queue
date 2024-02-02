@@ -1554,10 +1554,12 @@ dependencies = [
 name = "tashi-message-queue"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
  "color-eyre",
  "dotenvy",
  "tashi-consensus-engine",
+ "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
