@@ -1561,6 +1561,7 @@ dependencies = [
  "tashi-consensus-engine",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
