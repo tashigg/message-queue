@@ -7,6 +7,8 @@ use crate::args::LogFormat;
 
 pub mod args;
 
+pub mod mqtt;
+
 pub fn bootstrap(log_format: LogFormat) -> Result<()> {
     if let Err(e) = dotenvy::dotenv() {
         // Don't die if the file doesn't exist.
