@@ -8,6 +8,10 @@ publish = false
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
 rev = "e600a66"
 
+[dependencies.tashi-collections]
+git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
+rev = "e600a66"
+
 [dependencies]
 bytes = "1.5.0"
 color-eyre = "0.6.2"
