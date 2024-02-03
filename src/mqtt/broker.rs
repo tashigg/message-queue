@@ -1,7 +1,9 @@
+use std::fmt::Display;
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
 use color_eyre::eyre::Context;
+use tashi_collections::HashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
@@ -9,8 +11,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::mqtt::protocol;
 use crate::mqtt::protocol::{
-    ConnAck, ConnectReturnCode, Disconnect, DisconnectProperties, DisconnectReasonCode, Packet,
-    PingResp, Protocol,
+    ConnAck, ConnectReturnCode, Disconnect, DisconnectProperties, DisconnectReasonCode, Filter,
+    Packet, PingResp, Protocol, SubAck,
 };
 
 pub struct MqttBroker {
@@ -80,6 +82,8 @@ struct Connection {
     write_buf: BytesMut,
 
     token: CancellationToken,
+
+    subscriptions: HashMap<String, Filter>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -98,6 +102,7 @@ impl Connection {
             read_len: 0,
             write_buf: BytesMut::with_capacity(8192),
             token,
+            subscriptions: HashMap::with_capacity_and_hasher(256, Default::default()),
         }
     }
 
@@ -121,17 +126,10 @@ impl Connection {
                 .await?;
             }
             _ => {
-                self.send(Packet::Disconnect(
-                    Disconnect {
-                        reason_code: DisconnectReasonCode::ProtocolError,
-                    },
-                    Some(DisconnectProperties {
-                        session_expiry_interval: None,
-                        reason_string: Some("expected CONNECT packet".into()),
-                        user_properties: vec![],
-                        server_reference: None,
-                    }),
-                ))
+                self.disconnect(
+                    DisconnectReasonCode::ProtocolError,
+                    "expected CONNECT packet",
+                )
                 .await?;
 
                 return Ok(());
@@ -145,6 +143,42 @@ impl Connection {
                 Packet::PingReq(_) => {
                     // Funny, you'd think there'd be some kind of nonce or something
                     self.send(Packet::PingResp(PingResp)).await?;
+                }
+                Packet::Subscribe(sub, _sub_props) => {
+                    if sub.filters.is_empty() {
+                        return self
+                            .disconnect(
+                                DisconnectReasonCode::ProtocolError,
+                                "no filters in SUBSCRIBE",
+                            )
+                            .await;
+                    }
+
+                    for filter in &sub.filters {
+                        if !protocol::valid_filter(&filter.path) {
+                            return self
+                                .disconnect(
+                                    DisconnectReasonCode::ProtocolError,
+                                    format!("invalid filter: {filter:?}"),
+                                )
+                                .await;
+                        }
+                    }
+
+                    self.subscriptions.extend(
+                        sub.filters
+                            .into_iter()
+                            .map(|filter| (filter.path.clone(), filter)),
+                    );
+
+                    self.send(Packet::SubAck(
+                        SubAck {
+                            pkid: sub.pkid,
+                            return_codes: vec![],
+                        },
+                        None,
+                    ))
+                    .await?;
                 }
                 _ => {
                     tracing::warn!(?packet, "received unsupported packet");
@@ -176,6 +210,27 @@ impl Connection {
             .write(packet, &mut self.write_buf)
             .wrap_err("protocol error")?;
         self.do_io().await
+    }
+
+    async fn disconnect(
+        &mut self,
+        reason_code: DisconnectReasonCode,
+        reason: impl Into<String>,
+    ) -> crate::Result<()> {
+        let reason_string = Some(reason.into());
+
+        self.send(Packet::Disconnect(
+            Disconnect { reason_code },
+            Some(DisconnectProperties {
+                session_expiry_interval: None,
+                reason_string,
+                user_properties: vec![],
+                server_reference: None,
+            }),
+        ))
+        .await?;
+        self.stream.shutdown().await?;
+        Ok(())
     }
 
     /// Read into `read_buf` at least once, and continue until `read_len` is satisfied,
