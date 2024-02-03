@@ -1,4 +1,6 @@
-/// `protocol` module of `rumqtt`
+pub mod broker;
+
+/// `rumqttd::protocol`
 ///
 /// If the files don't exist, try `git submodule update --init --recursive`.
 ///
@@ -10,7 +12,7 @@
 /// It also brings in a ton of non-optional crates that we don't strictly need.
 ///
 /// TODO: upstream getters for private fields we need access to, and we can get rid of the submodule
-#[path = "../rumqtt/rumqttd/src/protocol/mod.rs"]
+#[path = "../../rumqtt/rumqttd/src/protocol/mod.rs"]
 #[allow(warnings)]
 pub mod protocol;
 
