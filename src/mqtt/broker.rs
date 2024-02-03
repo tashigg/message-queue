@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use crate::mqtt::protocol;
 use crate::mqtt::protocol::{
     ConnAck, ConnectReturnCode, Disconnect, DisconnectProperties, DisconnectReasonCode, Packet,
-    Protocol,
+    PingResp, Protocol,
 };
 
 pub struct MqttBroker {
@@ -62,7 +62,7 @@ impl MqttBroker {
 
         self.token.cancel();
 
-        while let Some(_) = self.tasks.join_next().await {
+        while let Some(_res) = self.tasks.join_next().await {
             tracing::info!("{} connections remaining", self.tasks.len());
         }
 
@@ -108,7 +108,7 @@ impl Connection {
         };
 
         match &packet {
-            Packet::Connect(connect, ..) => {
+            Packet::Connect(..) => {
                 tracing::debug!(?packet, "received CONNECT");
 
                 self.send(Packet::ConnAck(
@@ -139,7 +139,17 @@ impl Connection {
         }
 
         while let Some(packet) = self.recv().await? {
-            tracing::debug!(?packet, "received packet");
+            tracing::trace!(?packet, "received packet");
+
+            match packet {
+                Packet::PingReq(_) => {
+                    // Funny, you'd think there'd be some kind of nonce or something
+                    self.send(Packet::PingResp(PingResp)).await?;
+                }
+                _ => {
+                    tracing::warn!(?packet, "received unsupported packet");
+                }
+            }
         }
 
         Ok(())
@@ -187,6 +197,7 @@ impl Connection {
                     let read = res.wrap_err("error reading from socket")?;
 
                     if read == 0 {
+                        tracing::debug!("connection closed by remote peer");
                         return Ok(ConnectionStatus::Closed);
                     }
 
@@ -194,6 +205,9 @@ impl Connection {
                 }
                 res = writer.write_buf(&mut self.write_buf), if !self.write_buf.is_empty() => {
                     res.wrap_err("error writing to socket")?;
+                }
+                _ = self.token.cancelled() => {
+                    return Ok(ConnectionStatus::Closed);
                 }
             }
 

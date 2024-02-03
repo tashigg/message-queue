@@ -1,5 +1,5 @@
 use clap::Parser;
-use tokio::io::AsyncWriteExt;
+use color_eyre::eyre::Context;
 
 use tashi_message_queue::args::Args;
 use tashi_message_queue::mqtt::broker::MqttBroker;
@@ -20,6 +20,7 @@ async fn main() -> Result<()> {
             }
 
             res = tokio::signal::ctrl_c() => {
+                res.wrap_err("error from ctrl_c() handler")?;
                 break;
             }
         }
