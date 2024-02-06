@@ -1558,6 +1558,7 @@ dependencies = [
  "clap",
  "color-eyre",
  "dotenvy",
+ "rand",
  "tashi-collections",
  "tashi-consensus-engine",
  "thiserror",
