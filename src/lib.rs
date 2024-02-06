@@ -3,9 +3,12 @@ use color_eyre::eyre::WrapErr;
 pub use color_eyre::eyre::{Error, Result};
 use tracing_subscriber::EnvFilter;
 
-use crate::args::LogFormat;
+use crate::args::{Args, LogFormat};
+use crate::config::Config;
 
 pub mod args;
+
+pub mod config;
 
 pub mod mqtt;
 
@@ -32,4 +35,17 @@ pub fn bootstrap(log_format: LogFormat) -> Result<()> {
     .map_err(|e| eyre!(e))?;
 
     Ok(())
+}
+
+/// NOTE: uses blocking I/O internally.
+pub fn create_tce_config(args: &Args, config: &Config) -> Result<tashi_consensus_engine::Config> {
+    let secret_key = args.secret_key.read_key()?;
+
+    let nodes = config
+        .addresses
+        .iter()
+        .map(|address| (address.key.clone(), address.addr))
+        .collect();
+
+    Ok(tashi_consensus_engine::Config::new(secret_key).initial_nodes(nodes))
 }

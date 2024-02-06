@@ -16,8 +16,11 @@ rev = "e600a66"
 bytes = "1.5.0"
 color-eyre = "0.6.2"
 dotenvy = "0.15.7"
+hex = "0.4.3"
 rand = "0.8.5"
+serde = { version = "1.0.196", features = ["derive", "std"] }
 thiserror = "1.0.56"
+toml = { version = "0.8.10", features = ["parse"] }
 tracing = "0.1.40"
 
 tokio-util = "0.7.10"
