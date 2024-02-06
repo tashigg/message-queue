@@ -1,8 +1,8 @@
-use std::fmt::Display;
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
 use color_eyre::eyre::Context;
+use rand::distributions::{Alphanumeric, DistString};
 use tashi_collections::HashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -11,9 +11,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::mqtt::protocol;
 use crate::mqtt::protocol::{
-    ConnAck, ConnectReturnCode, Disconnect, DisconnectProperties, DisconnectReasonCode, Filter,
-    Packet, PingResp, Protocol, SubAck,
+    ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
+    DisconnectReasonCode, Filter, Packet, PingResp, Protocol, QoS, SubAck, SubscribeReasonCode,
+    UnsubAck, UnsubAckReason,
 };
+
+// The MQTT spec imposes a maximum topic length of 64 KiB but implementations can impose a smaller limit
+const TOPIC_MAX_LENGTH: usize = 1024;
 
 pub struct MqttBroker {
     listen_addr: SocketAddr,
@@ -75,6 +79,8 @@ impl MqttBroker {
 struct Connection {
     remote_addr: SocketAddr,
 
+    client_id: String,
+
     protocol: protocol::v5::V5,
     stream: TcpStream,
     read_buf: BytesMut,
@@ -96,6 +102,7 @@ impl Connection {
     fn new(stream: TcpStream, remote_addr: SocketAddr, token: CancellationToken) -> Self {
         Connection {
             remote_addr,
+            client_id: String::new(),
             protocol: protocol::v5::V5,
             stream,
             read_buf: BytesMut::with_capacity(8192),
@@ -113,15 +120,34 @@ impl Connection {
         };
 
         match &packet {
-            Packet::Connect(..) => {
+            Packet::Connect(connect, ..) => {
                 tracing::debug!(?packet, "received CONNECT");
+
+                // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901059
+                let mut assigned_client_id = None;
+                self.client_id = if !connect.client_id.is_empty() {
+                    connect.client_id.clone()
+                } else {
+                    let client_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 23);
+                    assigned_client_id = Some(client_id.clone());
+                    client_id
+                };
 
                 self.send(Packet::ConnAck(
                     ConnAck {
                         session_present: false,
                         code: ConnectReturnCode::Success,
                     },
-                    None,
+                    Some(ConnAckProperties {
+                        assigned_client_identifier: assigned_client_id,
+                        // TODO: support wildcard subscriptions
+                        wildcard_subscription_available: Some(0),
+                        // TODO: support shared subscriptions
+                        shared_subscription_available: Some(0),
+                        // TODO: support subscription identifiers
+                        subscription_identifiers_available: Some(0),
+                        ..Default::default()
+                    }),
                 ))
                 .await?;
             }
@@ -165,16 +191,61 @@ impl Connection {
                         }
                     }
 
-                    self.subscriptions.extend(
-                        sub.filters
-                            .into_iter()
-                            .map(|filter| (filter.path.clone(), filter)),
-                    );
+                    let mut return_codes = Vec::with_capacity(sub.filters.len());
+                    self.subscriptions.reserve(sub.filters.len());
+
+                    for filter in sub.filters {
+                        if filter.path.len() > TOPIC_MAX_LENGTH {
+                            return_codes.push(SubscribeReasonCode::TopicFilterInvalid);
+                            continue;
+                        }
+
+                        let qos = filter.qos;
+
+                        self.subscriptions.insert(filter.path.clone(), filter);
+
+                        return_codes.push(match qos {
+                            QoS::AtMostOnce => SubscribeReasonCode::QoS0,
+                            QoS::AtLeastOnce => SubscribeReasonCode::QoS1,
+                            QoS::ExactlyOnce => SubscribeReasonCode::QoS2,
+                        });
+                    }
 
                     self.send(Packet::SubAck(
                         SubAck {
                             pkid: sub.pkid,
-                            return_codes: vec![],
+                            return_codes,
+                        },
+                        None,
+                    ))
+                    .await?;
+                }
+                Packet::Unsubscribe(unsub, _unsub_props) => {
+                    if unsub.filters.is_empty() {
+                        return self
+                            .disconnect(
+                                DisconnectReasonCode::ProtocolError,
+                                "no filters in UNSUBSCRIBE",
+                            )
+                            .await;
+                    }
+
+                    let reasons = unsub
+                        .filters
+                        .iter()
+                        .map(|filter| {
+                            self.subscriptions
+                                .remove(filter)
+                                .map_or(UnsubAckReason::NoSubscriptionExisted, |_| {
+                                    UnsubAckReason::Success
+                                })
+                        })
+                        .collect();
+
+                    self.send(Packet::UnsubAck(
+                        UnsubAck {
+                            pkid: unsub.pkid,
+                            reasons,
                         },
                         None,
                     ))

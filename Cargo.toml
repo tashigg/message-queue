@@ -16,6 +16,7 @@ rev = "e600a66"
 bytes = "1.5.0"
 color-eyre = "0.6.2"
 dotenvy = "0.15.7"
+rand = "0.8.5"
 thiserror = "1.0.56"
 tracing = "0.1.40"
 
