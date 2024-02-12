@@ -1,7 +1,7 @@
 use std::fmt::Write;
-use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::{fs, io};
 
 use color_eyre::eyre;
 use color_eyre::eyre::WrapErr;
@@ -116,42 +116,49 @@ fn generate_address_book(
     output_dir: &Path,
     force: bool,
 ) -> crate::Result<()> {
-    if output_dir.exists() {
-        let mut read_dir = output_dir.read_dir().wrap_err_with(|| {
-            format!(
-                "failed to open {} to check its contents",
-                output_dir.display()
-            )
-        })?;
+    // Instead of checking `output_dir.exists()` first which is technically a TOCTOU bug,
+    // we can just use the error code from `.read_dir()`.
+    match output_dir.read_dir() {
+        // The directory exists, check if it contains any files or remove them.
+        Ok(mut read_dir) => {
+            while let Some(entry) = read_dir.next().transpose().wrap_err_with(|| {
+                format!("error enumerating contents of {}", output_dir.display())
+            })? {
+                eyre::ensure!(
+                    force,
+                    "Output directory {} exists and is not empty; \
+                     pass `--force`/`-f` to overwrite its contents",
+                    output_dir.display()
+                );
 
-        while let Some(entry) = read_dir
-            .next()
-            .transpose()
-            .wrap_err_with(|| format!("error enumerating contents of {}", output_dir.display()))?
-        {
-            eyre::ensure!(
-                force,
-                "Output directory {} exists and is not empty; pass `--force`/`-f` to overwrite its contents",
-                output_dir.display()
-            );
+                let path = entry.path();
 
-            let path = entry.path();
+                let file_type = entry
+                    .file_type()
+                    .wrap_err_with(|| format!("failed to fetch metadata for {}", path.display()))?;
 
-            let file_type = entry
-                .file_type()
-                .wrap_err_with(|| format!("failed to fetch metadata for {}", path.display()))?;
-
-            if file_type.is_dir() {
-                fs::remove_dir_all(&path)
-            } else {
-                fs::remove_file(&path)
+                if file_type.is_dir() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    fs::remove_file(&path)
+                }
+                .wrap_err_with(|| format!("error removing {}", path.display()))?;
             }
-            .wrap_err_with(|| format!("error removing {}", path.display()))?;
+        }
+        // Directory does not exist, create it so we can proceed.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir_all(output_dir)
+                .wrap_err_with(|| format!("failed to create {}", output_dir.display()))?;
+        }
+        Err(other) => {
+            return Err(other).wrap_err_with(|| {
+                format!(
+                    "failed to open {} to check its contents",
+                    output_dir.display()
+                )
+            })
         }
     }
-
-    fs::create_dir_all(output_dir)
-        .wrap_err_with(|| format!("failed to create {}", output_dir.display()))?;
 
     let mut address_book = String::new();
 
