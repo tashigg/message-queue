@@ -3,51 +3,42 @@ use std::fs;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use clap::Parser;
 use color_eyre::eyre;
 use color_eyre::eyre::WrapErr;
 use serde::Serialize;
 use tashi_collections::HashSet;
 use tashi_consensus_engine::SecretKey;
 
-use tashi_message_queue::config::Address;
-use tashi_message_queue::Result;
+use crate::cli::LogFormat;
+use crate::config::Address;
 
-/// Conveniently generate an address book file and set of private keys for a dMQ session.
-///
-/// The command takes as an input some set of socket addresses,
-/// either from a given list (`from-list`)
-/// or enumerated from a base address and range of ports (`from-range`).
-///
-/// The resulting address book will be written to the given output directory as `address-book.toml`.
-///
-/// Additionally, secret keys will be generated for each address in the set as `key_N.pem`,
-/// where N is the zero-based index in the set. Comments are added to the `address-book.toml`
-/// to disambiguate.
-#[derive(clap::Parser)]
-struct Args {
+#[derive(clap::Args, Clone, Debug)]
+pub struct AddressBookArgs {
     #[command(subcommand)]
-    command: Command,
+    command: AddressBookCommand,
 }
 
-#[derive(clap::Args)]
+#[derive(clap::Args, Clone, Debug)]
 struct Common {
     /// The path to write the address book and key PEM files to.
     ///
     /// Will be created if it doesn't already exist.
     ///
     /// An error will be returned if the output directory already exists and is not empty.
-    #[clap(long, short = 'O', default_value = "address-book/")]
+    #[clap(long, short = 'O', default_value = "dmq/")]
     output_dir: PathBuf,
 
     /// If `--output-dir` exists and is not empty, erase its contents first.
     #[clap(long, short = 'f')]
     force: bool,
+
+    #[clap(short, long, default_value = "full")]
+    log: LogFormat,
 }
 
-#[derive(clap::Subcommand)]
+#[derive(clap::Subcommand, Clone, Debug)]
 #[clap(rename_all = "kebab-case")]
-enum Command {
+enum AddressBookCommand {
     /// Generate the address book from a list of predetermined socket addresses.
     FromList {
         // Needs to be part of the subcommand arguments to parse after the subcommand
@@ -62,7 +53,7 @@ enum Command {
     },
     /// Generate the address book from a base IP address and a range of ports.
     ///
-    /// The total number of addresses generated will be `port_end - port_start + 1`
+    /// The total number of addresses generated will be `PORT_END - PORT_START + 1`
     /// (because the range is inclusive).
     FromRange {
         #[clap(flatten)]
@@ -77,11 +68,18 @@ enum Command {
     },
 }
 
-fn main() -> Result<()> {
-    let args = Args::parse();
+impl AddressBookArgs {
+    pub fn log_format(&self) -> LogFormat {
+        match &self.command {
+            AddressBookCommand::FromList { common, .. } => common.log,
+            AddressBookCommand::FromRange { common, .. } => common.log,
+        }
+    }
+}
 
+pub fn main(args: AddressBookArgs) -> crate::Result<()> {
     match args.command {
-        Command::FromList {
+        AddressBookCommand::FromList {
             socket_addresses,
             common,
         } => {
@@ -92,7 +90,7 @@ fn main() -> Result<()> {
                 common.force,
             )
         }
-        Command::FromRange {
+        AddressBookCommand::FromRange {
             base_address,
             port_start,
             port_end,
@@ -117,7 +115,7 @@ fn generate_address_book(
     addresses: impl Iterator<Item = SocketAddr>,
     output_dir: &Path,
     force: bool,
-) -> Result<()> {
+) -> crate::Result<()> {
     if output_dir.exists() {
         let mut read_dir = output_dir.read_dir().wrap_err_with(|| {
             format!(
@@ -176,7 +174,7 @@ fn generate_address_book(
         // Mark each entry with a comment referencing its key file.
         writeln!(address_book, "# {pem_filename}").expect("writing to a String cannot fail");
 
-        // Serialize entries one at a time so we can add a comment above each one.
+        // Serialize entries one at a time, so we can add a comment above each one.
         #[derive(serde::Serialize)]
         struct AddressBookEntry {
             addresses: [Address; 1],

@@ -26,7 +26,7 @@ tracing = "0.1.40"
 tokio-util = "0.7.10"
 
 [dependencies.clap]
-version = "4.4.18"
+version = "4.5.0"
 features = ["derive", "env"]
 
 [dependencies.tokio]
