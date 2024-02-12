@@ -1,10 +1,15 @@
-use color_eyre::eyre::WrapErr;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+
+use color_eyre::eyre::Context;
 use tashi_consensus_engine::SecretKey;
 
-#[derive(clap::Parser, Debug)]
-pub struct Args {
+use crate::cli::LogFormat;
+use crate::config::Config;
+use crate::mqtt::broker::MqttBroker;
+
+#[derive(clap::Args, Clone, Debug)]
+pub struct RunArgs {
     #[clap(short, long, default_value = "full")]
     pub log: LogFormat,
 
@@ -17,7 +22,8 @@ pub struct Args {
     #[command(flatten)]
     pub secret_key: SecretKeyOpt,
 
-    pub config_file: PathBuf,
+    #[clap(default_value = "dmq/")]
+    pub config_dir: PathBuf,
 }
 
 #[derive(clap::Args, Debug, Clone)]
@@ -30,14 +36,6 @@ pub struct SecretKeyOpt {
     /// Read a P-256 secret key from a PEM-encoded file.
     #[clap(short = 'f', long, env)]
     pub secret_key_file: Option<PathBuf>,
-}
-
-#[derive(clap::ValueEnum, Debug, Copy, Clone)]
-pub enum LogFormat {
-    Full,
-    Compact,
-    Pretty,
-    Json,
 }
 
 impl SecretKeyOpt {
@@ -61,4 +59,59 @@ impl SecretKeyOpt {
 
         unreachable!("BUG: Clap should have required one of `--secret-key` or `--secret-key-file`")
     }
+}
+
+pub fn main(args: RunArgs) -> crate::Result<()> {
+    // File and stdio aren't truly async in Tokio so we might as well do that before we even start the runtime
+    let config = crate::config::read(&args.config_dir).wrap_err("error reading config")?;
+
+    let tce_config = create_tce_config(&args, &config).wrap_err("error initializing TCE config")?;
+
+    main_async(args, config, tce_config)
+}
+
+// `#[tokio::main]` doesn't have to be attached to the actual `main()`, and it can accept args
+#[tokio::main]
+async fn main_async(
+    args: RunArgs,
+    _config: Config,
+    _tce_config: tashi_consensus_engine::Config,
+) -> crate::Result<()> {
+    let mut broker = MqttBroker::bind(args.mqtt_listen_addr).await?;
+
+    loop {
+        tokio::select! {
+            res = broker.run() => {
+                res?;
+            }
+
+            res = tokio::signal::ctrl_c() => {
+                res.wrap_err("error from ctrl_c() handler")?;
+                break;
+            }
+        }
+    }
+
+    tracing::info!(
+        "Ctrl-C received; waiting for {} connections to close",
+        broker.connections()
+    );
+
+    broker.shutdown().await
+}
+
+/// NOTE: uses blocking I/O internally.
+fn create_tce_config(
+    args: &RunArgs,
+    config: &Config,
+) -> crate::Result<tashi_consensus_engine::Config> {
+    let secret_key = args.secret_key.read_key()?;
+
+    let nodes = config
+        .addresses
+        .iter()
+        .map(|address| (address.key.clone(), address.addr))
+        .collect();
+
+    Ok(tashi_consensus_engine::Config::new(secret_key).initial_nodes(nodes))
 }
