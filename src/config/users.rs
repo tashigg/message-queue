@@ -2,12 +2,12 @@ use std::path::Path;
 
 use tashi_collections::HashMap;
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct Users {
     pub users: HashMap<String, User>,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct User {
     pub password_hash: String,

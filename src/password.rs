@@ -17,9 +17,9 @@ pub struct PasswordHashingPool {
 }
 
 impl PasswordHashingPool {
-    pub fn new(argon2: impl Into<Arc<Argon2<'static>>>, max_blocking_tasks: usize) -> Self {
+    pub fn new(max_blocking_tasks: usize) -> Self {
         PasswordHashingPool {
-            argon2: argon2.into(),
+            argon2: init_argon2().into(),
             semaphore: Arc::new(Semaphore::new(max_blocking_tasks)),
         }
     }
@@ -29,16 +29,8 @@ impl PasswordHashingPool {
 
         let argon2 = self.argon2.clone();
 
-        self.blocking(move || {
-            let salt = SaltString::generate(rand::thread_rng());
-
-            let hash = argon2
-                .hash_password(&password, &salt)
-                .wrap_err("error hashing password")?;
-
-            Ok(hash.serialize())
-        })
-        .await?
+        self.blocking(move || hash_with_random_salt(&argon2, &password))
+            .await?
     }
 
     pub async fn verify(
@@ -79,4 +71,21 @@ impl PasswordHashingPool {
         .await
         .map_err(map_join_error)
     }
+}
+
+pub fn init_argon2() -> Argon2<'static> {
+    Argon2::default()
+}
+
+pub fn hash_with_random_salt(
+    argon2: &Argon2<'_>,
+    password: &[u8],
+) -> crate::Result<PasswordHashString> {
+    let salt = SaltString::generate(rand::thread_rng());
+
+    let hash = argon2
+        .hash_password(&password, &salt)
+        .wrap_err("error hashing password")?;
+
+    Ok(hash.serialize())
 }

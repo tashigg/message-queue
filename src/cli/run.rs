@@ -5,7 +5,7 @@ use color_eyre::eyre::Context;
 use tashi_consensus_engine::SecretKey;
 
 use crate::cli::LogFormat;
-use crate::config::Config;
+use crate::config::addresses::Addresses;
 use crate::mqtt::broker::MqttBroker;
 
 #[derive(clap::Args, Clone, Debug)]
@@ -63,18 +63,19 @@ impl SecretKeyOpt {
 
 pub fn main(args: RunArgs) -> crate::Result<()> {
     // File and stdio aren't truly async in Tokio so we might as well do that before we even start the runtime
-    let config = crate::config::read(&args.config_dir).wrap_err("error reading config")?;
+    let addresses =
+        crate::config::addresses::read(&args.config_dir).wrap_err("error reading config")?;
 
-    let tce_config = create_tce_config(&args, &config).wrap_err("error initializing TCE config")?;
+    let tce_config =
+        create_tce_config(&args, &addresses).wrap_err("error initializing TCE config")?;
 
-    main_async(args, config, tce_config)
+    main_async(args, tce_config)
 }
 
 // `#[tokio::main]` doesn't have to be attached to the actual `main()`, and it can accept args
 #[tokio::main]
 async fn main_async(
     args: RunArgs,
-    _config: Config,
     _tce_config: tashi_consensus_engine::Config,
 ) -> crate::Result<()> {
     let mut broker = MqttBroker::bind(args.mqtt_listen_addr).await?;
@@ -103,11 +104,11 @@ async fn main_async(
 /// NOTE: uses blocking I/O internally.
 fn create_tce_config(
     args: &RunArgs,
-    config: &Config,
+    addresses: &Addresses,
 ) -> crate::Result<tashi_consensus_engine::Config> {
     let secret_key = args.secret_key.read_key()?;
 
-    let nodes = config
+    let nodes = addresses
         .addresses
         .iter()
         .map(|address| (address.key.clone(), address.addr))
