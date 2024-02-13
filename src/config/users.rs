@@ -4,7 +4,8 @@ use tashi_collections::HashMap;
 
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Users {
-    pub users: HashMap<String, User>,
+    #[serde(rename = "users")]
+    pub by_username: HashMap<String, User>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]

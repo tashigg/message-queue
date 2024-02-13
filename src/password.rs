@@ -2,6 +2,7 @@ use crate::map_join_error;
 use argon2::password_hash::{PasswordHashString, SaltString};
 use argon2::{password_hash, Argon2, PasswordHash, PasswordHasher};
 use color_eyre::eyre::WrapErr;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
@@ -17,10 +18,10 @@ pub struct PasswordHashingPool {
 }
 
 impl PasswordHashingPool {
-    pub fn new(max_blocking_tasks: usize) -> Self {
+    pub fn new(max_blocking_tasks: NonZeroUsize) -> Self {
         PasswordHashingPool {
             argon2: init_argon2().into(),
-            semaphore: Arc::new(Semaphore::new(max_blocking_tasks)),
+            semaphore: Arc::new(Semaphore::new(max_blocking_tasks.get())),
         }
     }
 
@@ -84,7 +85,7 @@ pub fn hash_with_random_salt(
     let salt = SaltString::generate(rand::thread_rng());
 
     let hash = argon2
-        .hash_password(&password, &salt)
+        .hash_password(password, &salt)
         .wrap_err("error hashing password")?;
 
     Ok(hash.serialize())

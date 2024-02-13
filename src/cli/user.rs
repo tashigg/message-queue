@@ -106,6 +106,13 @@ pub fn main(args: UserArgs) -> crate::Result<()> {
                         .lock()
                         .read_line(&mut password)
                         .wrap_err("error reading from stdin")?;
+
+                    // `.read_line()` includes the newline, but that's not part of the password
+                    // WTB something like `.trim_end()` that operates on an owned string
+                    while matches!(password.chars().last(), Some('\r') | Some('\n')) {
+                        password.pop();
+                    }
+
                     password
                 }
             };
@@ -232,7 +239,7 @@ fn generate_user_record(
         .to_string();
 
     let users_toml = toml::to_string(&Users {
-        users: HashMap::from_iter([(username, User { password_hash })]),
+        by_username: HashMap::from_iter([(username, User { password_hash })]),
     })
     .wrap_err("error serializing user record to TOML")?;
 

@@ -25,6 +25,7 @@ serde = { version = "1.0.196", features = ["derive", "std"] }
 thiserror = "1.0.56"
 toml = { version = "0.8.10", features = ["parse"] }
 tracing = "0.1.40"
+triomphe = "0.1.11"
 
 tokio-util = "0.7.10"
 
