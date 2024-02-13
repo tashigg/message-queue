@@ -13,15 +13,19 @@ git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
 rev = "e600a66"
 
 [dependencies]
+argon2 = { version = "0.5.3", features = ["std"] }
 bytes = "1.5.0"
 color-eyre = "0.6.2"
+dialoguer = "0.11.0"
 dotenvy = "0.15.7"
 hex = "0.4.3"
+num_enum = "0.7.2"
 rand = "0.8.5"
 serde = { version = "1.0.196", features = ["derive", "std"] }
 thiserror = "1.0.56"
 toml = { version = "0.8.10", features = ["parse"] }
 tracing = "0.1.40"
+triomphe = "0.1.11"
 
 tokio-util = "0.7.10"
 
@@ -43,4 +47,7 @@ features = ["json", "env-filter"]
 opt-level = 3
 
 [profile.dev.package.tokio]
+opt-level = 3
+
+[profile.dev.package.argon2]
 opt-level = 3

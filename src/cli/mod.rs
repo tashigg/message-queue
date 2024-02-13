@@ -3,9 +3,12 @@ use clap::Parser;
 use run::RunArgs;
 
 use crate::cli::address_book::AddressBookArgs;
+use crate::cli::user::UserArgs;
 
 pub mod address_book;
 pub mod run;
+
+pub mod user;
 
 /// A decentralized message queue powered by the Tashi Consensus Engine.
 #[derive(clap::Parser, Debug)]
@@ -30,6 +33,8 @@ pub enum Command {
     /// where N is the zero-based index in the set. Comments are added to the `address-book.toml`
     /// to disambiguate.
     AddressBook(AddressBookArgs),
+    /// Manage user credentials for connecting to the message broker protocol.
+    User(UserArgs),
 }
 
 #[derive(clap::ValueEnum, Debug, Copy, Clone)]
@@ -43,8 +48,9 @@ pub enum LogFormat {
 impl Args {
     pub fn log_format(&self) -> LogFormat {
         match &self.command {
-            Command::Run(run_args) => run_args.log,
+            Command::Run(args) => args.log,
             Command::AddressBook(args) => args.log_format(),
+            Command::User(args) => args.log_format(),
         }
     }
 }
@@ -59,5 +65,6 @@ pub fn main() -> crate::Result<()> {
     match args.command {
         Command::Run(args) => run::main(args),
         Command::AddressBook(args) => address_book::main(args),
+        Command::User(args) => user::main(args),
     }
 }

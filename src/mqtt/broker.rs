@@ -1,4 +1,6 @@
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use bytes::BytesMut;
 use color_eyre::eyre::Context;
@@ -9,12 +11,14 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use crate::config::users::Users;
 use crate::mqtt::protocol;
 use crate::mqtt::protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
     DisconnectReasonCode, Filter, Packet, PingResp, Protocol, QoS, SubAck, SubscribeReasonCode,
     UnsubAck, UnsubAckReason,
 };
+use crate::password::PasswordHashingPool;
 
 // The MQTT spec imposes a maximum topic length of 64 KiB but implementations can impose a smaller limit
 const TOPIC_MAX_LENGTH: usize = 1024;
@@ -27,10 +31,17 @@ pub struct MqttBroker {
     token: CancellationToken,
 
     tasks: JoinSet<crate::Result<()>>,
+
+    shared: Arc<Shared>,
+}
+
+struct Shared {
+    password_hasher: PasswordHashingPool,
+    users: Users,
 }
 
 impl MqttBroker {
-    pub async fn bind(listen_addr: SocketAddr) -> crate::Result<Self> {
+    pub async fn bind(listen_addr: SocketAddr, users: Users) -> crate::Result<Self> {
         let listener = TcpListener::bind(listen_addr)
             .await
             .wrap_err_with(|| format!("failed to bind listen_addr: {}", listen_addr))?;
@@ -40,6 +51,12 @@ impl MqttBroker {
             listener,
             token: CancellationToken::new(),
             tasks: JoinSet::new(),
+            shared: Arc::new(Shared {
+                password_hasher: PasswordHashingPool::new(
+                    std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN),
+                ),
+                users,
+            }),
         })
     }
 
@@ -54,7 +71,7 @@ impl MqttBroker {
 
             let conn = Connection::new(stream, remote_addr, self.token.clone());
 
-            self.tasks.spawn(conn.run());
+            self.tasks.spawn(conn.run(self.shared.clone()));
         }
     }
 
@@ -113,14 +130,16 @@ impl Connection {
         }
     }
 
-    #[tracing::instrument(name = "Connection::run", skip(self), fields(remote_addr=%self.remote_addr))]
-    async fn run(mut self) -> crate::Result<()> {
+    #[tracing::instrument(name = "Connection::run", skip_all, fields(remote_addr=%self.remote_addr))]
+    async fn run(mut self, shared: Arc<Shared>) -> crate::Result<()> {
+        // TODO: set timeouts on the `TcpStream` so a malicious client cannot hold it open forever
+
         let Some(packet) = self.recv().await? else {
             return Ok(());
         };
 
         match &packet {
-            Packet::Connect(connect, ..) => {
+            Packet::Connect(connect, .., login) => {
                 tracing::debug!(?packet, "received CONNECT");
 
                 // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901059
@@ -132,6 +151,25 @@ impl Connection {
                     assigned_client_id = Some(client_id.clone());
                     client_id
                 };
+
+                if let Some(login) = login {
+                    let Some(user) = shared.users.by_username.get(&login.username) else {
+                        return self
+                            .disconnect(DisconnectReasonCode::NotAuthorized, "")
+                            .await;
+                    };
+
+                    let verified = shared
+                        .password_hasher
+                        .verify(login.password.as_bytes(), &user.password_hash)
+                        .await?;
+
+                    if !verified {
+                        return self
+                            .disconnect(DisconnectReasonCode::NotAuthorized, "")
+                            .await;
+                    }
+                }
 
                 self.send(Packet::ConnAck(
                     ConnAck {

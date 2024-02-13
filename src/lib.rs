@@ -1,3 +1,4 @@
+use color_eyre::eyre;
 use color_eyre::eyre::eyre;
 use color_eyre::eyre::WrapErr;
 pub use color_eyre::eyre::{Error, Result};
@@ -10,6 +11,8 @@ pub mod cli;
 pub mod config;
 
 pub mod mqtt;
+
+pub mod password;
 
 pub fn bootstrap(log_format: LogFormat) -> Result<()> {
     if let Err(e) = dotenvy::dotenv() {
@@ -34,4 +37,9 @@ pub fn bootstrap(log_format: LogFormat) -> Result<()> {
     .map_err(|e| eyre!(e))?;
 
     Ok(())
+}
+
+pub fn map_join_error(e: tokio::task::JoinError) -> Error {
+    // The logic to extract the panic payload already exists in TCE, it's just tied to `anyhow`
+    eyre::eyre!(tashi_consensus_engine::map_join_error(e))
 }
