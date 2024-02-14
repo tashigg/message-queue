@@ -81,12 +81,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anyhow"
-version = "1.0.79"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "080e9890a082662b09c1ad45f567faeeb47f22b5fb23895fbe1e651e718e25ca"
-
-[[package]]
 name = "argon2"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1657,7 +1651,7 @@ dependencies = [
 [[package]]
 name = "tashi-collections"
 version = "0.3.0"
-source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=e600a66#e600a66025458c4f4e40a665a74f2446f0ff0a1e"
+source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=a87e2453ffca6fd2fdc200b895edfc0c69f1810a#a87e2453ffca6fd2fdc200b895edfc0c69f1810a"
 dependencies = [
  "fnv",
  "hashbrown",
@@ -1666,12 +1660,12 @@ dependencies = [
 [[package]]
 name = "tashi-consensus-engine"
 version = "0.3.0"
-source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=e600a66#e600a66025458c4f4e40a665a74f2446f0ff0a1e"
+source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=a87e2453ffca6fd2fdc200b895edfc0c69f1810a#a87e2453ffca6fd2fdc200b895edfc0c69f1810a"
 dependencies = [
- "anyhow",
  "backoff",
  "bytes",
  "der",
+ "eyre",
  "fastcdc",
  "futures",
  "hex",
