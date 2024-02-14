@@ -7,11 +7,11 @@ default-run = "tashi-message-queue"
 
 [dependencies.tashi-consensus-engine]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "e600a66"
+rev = "a87e2453ffca6fd2fdc200b895edfc0c69f1810a"
 
 [dependencies.tashi-collections]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "e600a66"
+rev = "a87e2453ffca6fd2fdc200b895edfc0c69f1810a"
 
 [dependencies]
 argon2 = { version = "0.5.3", features = ["std"] }
