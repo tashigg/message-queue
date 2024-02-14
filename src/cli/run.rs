@@ -2,7 +2,8 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use color_eyre::eyre::Context;
-use tashi_consensus_engine::SecretKey;
+use tashi_consensus_engine::sync::quic::QuicSocket;
+use tashi_consensus_engine::{Platform, SecretKey};
 
 use crate::cli::LogFormat;
 use crate::config;
@@ -80,9 +81,15 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
 async fn main_async(
     args: RunArgs,
     users: Users,
-    _tce_config: tashi_consensus_engine::Config,
+    tce_config: tashi_consensus_engine::Config,
 ) -> crate::Result<()> {
     let mut broker = MqttBroker::bind(args.mqtt_listen_addr, users).await?;
+
+    let (tce_platform, _tce_message_stream) = Platform::start(
+        tce_config,
+        QuicSocket::bind_udp(args.tce_listen_addr).await?,
+        false,
+    )?;
 
     loop {
         tokio::select! {
@@ -92,6 +99,7 @@ async fn main_async(
 
             res = tokio::signal::ctrl_c() => {
                 res.wrap_err("error from ctrl_c() handler")?;
+                tce_platform.shutdown().await;
                 break;
             }
         }
@@ -118,5 +126,7 @@ fn create_tce_config(
         .map(|address| (address.key.clone(), address.addr))
         .collect();
 
-    Ok(tashi_consensus_engine::Config::new(secret_key).initial_nodes(nodes))
+    Ok(tashi_consensus_engine::Config::new(secret_key)
+        .initial_nodes(nodes)
+        .report_events_before_consensus())
 }

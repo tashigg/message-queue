@@ -14,6 +14,8 @@ pub mod mqtt;
 
 pub mod password;
 
+pub mod tce_message;
+
 pub fn bootstrap(log_format: LogFormat) -> Result<()> {
     if let Err(e) = dotenvy::dotenv() {
         // Don't die if the file doesn't exist.

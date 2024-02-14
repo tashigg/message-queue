@@ -208,6 +208,7 @@ impl Connection {
                     // Funny, you'd think there'd be some kind of nonce or something
                     self.send(Packet::PingResp(PingResp)).await?;
                 }
+
                 Packet::Subscribe(sub, _sub_props) => {
                     if sub.filters.is_empty() {
                         return self
