@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "rumqttd-shim"]
+
 [package]
 name = "tashi-message-queue"
 version = "0.1.0"
@@ -22,6 +25,7 @@ dotenvy = "0.15.7"
 hex = "0.4.3"
 num_enum = "0.7.2"
 rand = "0.8.5"
+rumqttd-shim = { path = "rumqttd-shim" }
 serde = { version = "1.0.196", features = ["derive", "std"] }
 thiserror = "1.0.56"
 toml = { version = "0.8.10", features = ["parse"] }
