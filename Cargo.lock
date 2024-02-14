@@ -189,6 +189,9 @@ name = "bytes"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "cc"
@@ -501,6 +504,17 @@ name = "flagset"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d52a7e408202050813e6f1d9addadcaafef3dca7530c7ddfb005d4081cce6779"
+
+[[package]]
+name = "flume"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55ac459de2512911e4b674ce33cf20befaba382d05b62b008afc1c8b57cbf181"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "spin 0.9.8",
+]
 
 [[package]]
 name = "fnv"
@@ -1299,6 +1313,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rumqttd-router"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "flume",
+ "parking_lot",
+ "rand",
+ "serde",
+ "serde_json",
+ "slab",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1587,6 +1616,9 @@ name = "spin"
 version = "0.9.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
+dependencies = [
+ "lock_api",
+]
 
 [[package]]
 name = "spki"
@@ -1713,6 +1745,7 @@ dependencies = [
  "hex",
  "num_enum",
  "rand",
+ "rumqttd-router",
  "serde",
  "tashi-collections",
  "tashi-consensus-engine",

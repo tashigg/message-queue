@@ -25,3 +25,5 @@ pub mod protocol;
 // However, for QoS1 and QoS2 packets, we probably don't want to respond to the sender
 // with `PUBACK` and `PUBREL` respectively until we have some notion that the message has actually
 // been acknowledged by other peers. Which means we need a lot of access to the broker internals.
+
+pub use rumqttd_router as router;
