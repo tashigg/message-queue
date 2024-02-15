@@ -1754,6 +1754,7 @@ dependencies = [
  "der",
  "dialoguer",
  "dotenvy",
+ "futures",
  "hex",
  "num_enum",
  "rand",
