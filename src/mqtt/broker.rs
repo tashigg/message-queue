@@ -312,7 +312,13 @@ impl Connection {
                 Err(protocol::Error::InsufficientBytes(expected)) => {
                     self.read_len = expected;
                 }
-                Err(e) => return Err(e).wrap_err("protocol error"),
+                Err(e) => {
+                    // Sending a disconnect packet on protocol error is optional (4.13.1).
+                    self.disconnect(DisconnectReasonCode::ProtocolError, e.to_string())
+                        .await?;
+
+                    return Err(e).wrap_err("failed to read the packet");
+                }
             }
 
             if self.do_io().await? == ConnectionStatus::Closed {
