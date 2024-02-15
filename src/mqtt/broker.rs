@@ -190,6 +190,7 @@ impl Connection {
                 .await?;
             }
             _ => {
+                // MQTT-3.1.0-1
                 self.disconnect(
                     DisconnectReasonCode::ProtocolError,
                     "expected CONNECT packet",
@@ -289,6 +290,11 @@ impl Connection {
                         None,
                     ))
                     .await?;
+                }
+                Packet::Connect(..) => {
+                    // MQTT-3.1.0-2
+                    self.disconnect(DisconnectReasonCode::ProtocolError, "second CONNECT packet")
+                        .await?;
                 }
                 _ => {
                     tracing::warn!(?packet, "received unsupported packet");
