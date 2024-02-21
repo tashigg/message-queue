@@ -8,7 +8,7 @@ services:
       context: ../
       dockerfile: tests/Dockerfile
       ssh:
-        - default=${SSH_AUTH_SOCK}
+        - default
     image: message-queue-test
     volumes:
       - ./dmq:/home/message-queue/dmq
@@ -19,7 +19,7 @@ services:
         aliases:
         - broker1.example.com
     entrypoint: target/release/tashi-message-queue
-    command: --secret-key-file dmq/key_0.pem /home/message-queue/dmq/address-book.toml
+    command: run --secret-key-file dmq/key_0.pem /home/message-queue/dmq
 
   broker2:
     container_name: broker2
@@ -35,7 +35,7 @@ services:
         aliases:
         - broker2.example.com
     entrypoint: target/release/tashi-message-queue
-    command: --secret-key-file dmq/key_1.pem /home/message-queue/dmq/address-book.toml
+    command: run --secret-key-file dmq/key_1.pem /home/message-queue/dmq
 
 networks:
   mesh-app-bridge:

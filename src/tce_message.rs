@@ -1,11 +1,15 @@
+use bytes::Bytes;
 use std::fmt::Debug;
+use std::time::SystemTime;
 
-use der::asn1::BitStringRef;
-use der::Encode;
+use der::asn1::{BitStringRef, OctetString, OctetStringRef};
+use der::{Encode, Header, Length, Reader, Tag, TagNumber, Writer};
+
+use rumqttd_shim::protocol::QoS;
 
 #[derive(der::Sequence)]
 pub struct Transaction {
-    data: TransactionData,
+    pub data: TransactionData,
 }
 
 #[derive(der::Choice)]
@@ -15,11 +19,60 @@ pub enum TransactionData {
     Publish(PublishTrasaction),
 }
 
+// Transcoding to DER was chosen so that we are not baking-in a specific version of the MQTT protocol.
+/// DER mapping of [`rumqttd::protocol::Packet::Publish`].
 #[derive(der::Sequence)]
 pub struct PublishTrasaction {
-    topic: String,
-    meta: PublishMeta,
-    payload: Vec<u8>,
+    pub topic: String,
+    pub meta: PublishMeta,
+    pub payload: BytesAsOctetString,
+    /// A timestamp which can be compared with the timestamp of the event containing this transaction
+    /// to determine how long the message was in the TCE transaction queue on the originating broker
+    /// and calculate an appropriate correction for `message_expiry_interval`.
+    ///
+    /// The necessary correction is expected to be negligible unless the broker is disconnected from
+    /// the network for an extended period of time.
+    ///
+    /// This value is in seconds because `message_expiry_interval` is in seconds.
+    pub timestamp_received: TimestampSeconds,
+    #[asn1(optional = "true")]
+    pub properties: Option<PublishTransactionProperties>,
+}
+
+/// DER mapping of [`rumqttd::protocol::PublishProperties`].
+///
+/// `topic_alias` and `subscription_identifiers` are omitted as they are only used between
+/// a client and a broker.
+#[derive(der::Sequence)]
+pub struct PublishTransactionProperties {
+    // Note: these match the tag bytes used by the MQTT protocol, where possible.
+    #[asn1(context_specific = "1", optional = "true")]
+    pub payload_format_indicator: Option<u8>,
+
+    /// The lifetime of the message, in seconds elapsed from its receipt.
+    ///
+    /// Per section 3.3.2.3.3 of the MQTT v5 spec:
+    /// > The PUBLISH packet sent to a Client by the Server MUST contain a Message Expiry Interval
+    /// > set to the received value minus the time that the Application Message
+    /// > has been waiting in the Server
+    ///
+    /// Brokers receiving this message via consensus should use the consensus timestamp as a basis.
+    #[asn1(context_specific = "2", optional = "true")]
+    pub message_expiry_interval: Option<u32>,
+
+    #[asn1(context_specific = "3", optional = "true")]
+    pub content_type: Option<String>,
+
+    #[asn1(context_specific = "8", optional = "true")]
+    pub response_topic: Option<String>,
+
+    #[asn1(context_specific = "9", optional = "true")]
+    pub correlation_data: Option<BytesAsOctetString>,
+
+    // Specified as 38 (0x26) but context_specific tags don't go that high
+    #[asn1(context_specific = "30", optional = "true")]
+    // The `der` crate doesn't support tuples, but it does support arrays
+    pub user_properties: Option<Vec<[String; 2]>>,
 }
 
 impl TryFrom<Transaction> for tashi_consensus_engine::ApplicationTransaction {
@@ -166,12 +219,71 @@ impl Debug for PublishMeta {
     }
 }
 
-/// Quality of service.
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
-pub enum QoS {
-    AtMostOnce,
-    AtLeastOnce,
-    ExactlyOnce,
+// FIXME: remove when `der 0.8.0` is released:
+// https://github.com/RustCrypto/formats/issues/1356#issuecomment-1956225669
+#[derive(Clone, Debug)]
+pub struct BytesAsOctetString(pub Bytes);
+
+impl der::FixedTag for BytesAsOctetString {
+    const TAG: Tag = Tag::OctetString;
+}
+
+impl der::EncodeValue for BytesAsOctetString {
+    fn value_len(&self) -> der::Result<Length> {
+        OctetStringRef::new(&self.0)?.value_len()
+    }
+
+    fn encode_value(&self, encoder: &mut impl Writer) -> der::Result<()> {
+        OctetStringRef::new(&self.0)?.encode_value(encoder)
+    }
+}
+
+impl<'a> der::DecodeValue<'a> for BytesAsOctetString {
+    fn decode_value<R: Reader<'a>>(reader: &mut R, header: Header) -> der::Result<Self> {
+        Ok(BytesAsOctetString(
+            OctetString::decode_value(reader, header)?
+                .into_bytes()
+                .into(),
+        ))
+    }
+}
+
+/// A timestamp in seconds from the Unix epoch, UTC.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct TimestampSeconds(pub u64);
+
+impl der::FixedTag for TimestampSeconds {
+    const TAG: Tag = Tag::Application {
+        constructed: false,
+        number: TagNumber::N0,
+    };
+}
+
+impl der::EncodeValue for TimestampSeconds {
+    fn value_len(&self) -> der::Result<Length> {
+        u64::value_len(&self.0)
+    }
+
+    fn encode_value(&self, encoder: &mut impl Writer) -> der::Result<()> {
+        u64::encode_value(&self.0, encoder)
+    }
+}
+
+impl<'de> der::DecodeValue<'de> for TimestampSeconds {
+    fn decode_value<R: Reader<'de>>(reader: &mut R, header: Header) -> der::Result<Self> {
+        Ok(Self(u64::decode_value(reader, header)?))
+    }
+}
+
+impl TimestampSeconds {
+    pub fn now() -> Self {
+        TimestampSeconds(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("Fatal error: system time set before Unix epoch!")
+                .as_secs(),
+        )
+    }
 }
 
 #[cfg(test)]

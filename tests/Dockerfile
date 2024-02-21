@@ -7,9 +7,12 @@ WORKDIR /home/message-queue
 COPY Cargo.lock Cargo.toml ./
 COPY src/lib.rs src/lib.rs
 COPY src/main.rs src/main.rs
+COPY rumqttd-shim/ rumqttd-shim/
+COPY .cargo/config.toml .cargo/config.toml
 
 RUN mkdir -p -m 0600 /root/.ssh
 RUN ssh-keyscan github.com > /root/.ssh/known_hosts
+COPY --chmod=0400 docker-util/ssh_config /etc/ssh/ssh_config.d/github.com.conf
 
 ENV CARGO_UNSTABLE_SPARSE_REGISTRY=true
 
@@ -18,6 +21,11 @@ ENV CARGO_UNSTABLE_SPARSE_REGISTRY=true
 # appropriate key.
 # See https://docs.docker.com/engine/reference/builder/#run---mounttypessh
 # And https://www.ssh.com/academy/ssh/agent#ssh-agent-forwarding
+#
+# Test that SSH forwarding is working or explain why it isn't.
+RUN --mount=type=ssh --mount=target=docker-util/,source=docker-util/ bash docker-util/test-ssh.sh
+
+# Download all our dependencies in its own layer that's unlikely to be invalidated.
 RUN --mount=type=ssh cargo fetch
 
 # Build the biggest deps in a separately cached layer.

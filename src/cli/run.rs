@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use color_eyre::eyre::Context;
 use tashi_consensus_engine::sync::quic::QuicSocket;
@@ -83,13 +84,15 @@ async fn main_async(
     users: Users,
     tce_config: tashi_consensus_engine::Config,
 ) -> crate::Result<()> {
-    let mut broker = MqttBroker::bind(args.mqtt_listen_addr, users).await?;
-
     let (tce_platform, _tce_message_stream) = Platform::start(
         tce_config,
         QuicSocket::bind_udp(args.tce_listen_addr).await?,
         false,
     )?;
+
+    let tce_platform = Arc::new(tce_platform);
+
+    let mut broker = MqttBroker::bind(args.mqtt_listen_addr, users, tce_platform.clone()).await?;
 
     loop {
         tokio::select! {

@@ -4,12 +4,19 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use color_eyre::eyre::Context;
+use der::Encode;
 use rand::distributions::{Alphanumeric, DistString};
+use tashi_collections::FnvHashMap;
+use tashi_consensus_engine::Platform;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+
+use rumqttd_shim::protocol::{
+    PubAck, PubAckReason, PubRec, PubRecReason, Publish, PublishProperties,
+};
 
 use crate::config::users::Users;
 use crate::mqtt::protocol::{
@@ -17,12 +24,21 @@ use crate::mqtt::protocol::{
     DisconnectReasonCode, Packet, PingResp, Protocol, QoS, SubAck, SubscribeReasonCode, UnsubAck,
     UnsubAckReason,
 };
+use crate::mqtt::publish::ValidateError;
 use crate::mqtt::session::{InactiveSessions, Session};
-use crate::mqtt::{protocol, ClientId};
+use crate::mqtt::{protocol, publish, ClientId};
 use crate::password::PasswordHashingPool;
+use crate::tce_message::{Transaction, TransactionData};
 
 // The MQTT spec imposes a maximum topic length of 64 KiB but implementations can impose a smaller limit
 const TOPIC_MAX_LENGTH: usize = 1024;
+
+// `hashbrown` uses a max load factor of 7/8 and rounds allocations up to the next power of two,
+// so a maximum larger than 112 will actually lead to an allocation of 256 buckets,
+// meaning up to ~56% wasted space in the table.
+//
+// Might as well just make it a nice round number to avoid advertising that we're using a hashmap.
+const MAX_TOPIC_ALIAS: u16 = 100;
 
 pub struct MqttBroker {
     listen_addr: SocketAddr,
@@ -50,10 +66,15 @@ struct Shared {
     password_hasher: PasswordHashingPool,
     users: Users,
     broker_tx: mpsc::Sender<BrokerEvent>,
+    platform: Arc<Platform>,
 }
 
 impl MqttBroker {
-    pub async fn bind(listen_addr: SocketAddr, users: Users) -> crate::Result<Self> {
+    pub async fn bind(
+        listen_addr: SocketAddr,
+        users: Users,
+        platform: Arc<Platform>,
+    ) -> crate::Result<Self> {
         let listener = TcpListener::bind(listen_addr)
             .await
             .wrap_err_with(|| format!("failed to bind listen_addr: {}", listen_addr))?;
@@ -71,6 +92,7 @@ impl MqttBroker {
                 ),
                 users,
                 broker_tx: broker_tx.clone(),
+                platform,
             }),
             broker_rx,
             inactive_sessions: Default::default(),
@@ -198,6 +220,17 @@ struct Connection {
     token: CancellationToken,
     shared: Arc<Shared>,
     session: Session,
+
+    // The `u16` is client-generated which would suggest that we use a keyed hash map,
+    // but it seems incredibly difficult to exploit this for a HashDOS attack if it's restricted
+    // to the range `[1, N]` where N << 2^16.
+    //
+    // This is not stored with the session state as topic aliases are explicitly per-connection:
+    // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901113
+    //
+    // Also note that client->broker and broker->client PUBLISHes have separate topic alias spaces,
+    // so we can punt on implementing the latter.
+    client_topic_aliases: FnvHashMap<u16, String>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -224,6 +257,7 @@ impl Connection {
             token,
             shared,
             session: Session::default(),
+            client_topic_aliases: FnvHashMap::default(),
         }
     }
 
@@ -258,6 +292,9 @@ impl Connection {
             Packet::PingReq(_) => {
                 // Funny, you'd think there'd be some kind of nonce or something
                 self.send(Packet::PingResp(PingResp)).await?;
+            }
+            Packet::Publish(publish, publish_props) => {
+                return self.handle_publish(publish, publish_props).await;
             }
             Packet::Subscribe(sub, _sub_props) => {
                 if sub.filters.is_empty() {
@@ -455,10 +492,92 @@ impl Connection {
                 subscription_identifiers_available: Some(0),
                 // TODO: support retained messages
                 retain_available: Some(0),
+                topic_alias_max: Some(MAX_TOPIC_ALIAS),
                 ..Default::default()
             }),
         ))
         .await?;
+
+        Ok(())
+    }
+
+    async fn handle_publish(
+        &mut self,
+        publish: Publish,
+        publish_props: Option<PublishProperties>,
+    ) -> crate::Result<()> {
+        let qos = publish.qos();
+        let pkid = publish.pkid();
+
+        let transaction = match publish::validate_and_convert(
+            publish,
+            publish_props,
+            MAX_TOPIC_ALIAS,
+            &mut self.client_topic_aliases,
+        ) {
+            // `transaction` is validated and its topic alias has been resolved (if applicable)
+            Ok(transaction) => Transaction {
+                data: TransactionData::Publish(transaction),
+            },
+            Err(ValidateError::Disconnect { reason, message }) => {
+                return self.disconnect(reason, message).await;
+            }
+            Err(ValidateError::Reject(reject)) => {
+                match qos {
+                    QoS::AtMostOnce => {
+                        // No response is specified for QoS 0, even on an error.
+                        tracing::debug!("rejecting QoS 0 publish: {reject:?}");
+                    }
+                    QoS::AtLeastOnce => {
+                        self.send(reject.into_pub_ack(pkid)).await?;
+                    }
+                    QoS::ExactlyOnce => {
+                        self.send(reject.into_pub_rec(pkid)).await?;
+                    }
+                }
+
+                return Ok(());
+            }
+        };
+
+        self.shared
+            .platform
+            .send(
+                transaction
+                    .to_der()
+                    .wrap_err("failed to encode Transaction")?,
+            )
+            // If this fails, we'll drop the connection without sending a PUBACK/PUBREC,
+            // so the client will know we died before taking ownership and can try another broker.
+            .wrap_err("TCE has shut down")?;
+
+        // TODO: dispatch `transaction` locally
+
+        match qos {
+            QoS::AtMostOnce => {
+                // Do nothing.
+            }
+            QoS::AtLeastOnce => {
+                self.send(Packet::PubAck(
+                    PubAck {
+                        pkid,
+                        reason: PubAckReason::Success,
+                    },
+                    None,
+                ))
+                .await?;
+            }
+            QoS::ExactlyOnce => {
+                self.send(Packet::PubRec(
+                    PubRec {
+                        pkid,
+                        reason: PubRecReason::Success,
+                    },
+                    None,
+                ))
+                .await?;
+            }
+        }
 
         Ok(())
     }
