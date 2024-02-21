@@ -1760,6 +1760,7 @@ dependencies = [
  "rand",
  "rumqttd-shim",
  "serde",
+ "slotmap",
  "tashi-collections",
  "tashi-consensus-engine",
  "thiserror",

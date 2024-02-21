@@ -6,6 +6,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::cli::LogFormat;
 
+pub mod trie;
+
 pub mod cli;
 
 pub mod config;
