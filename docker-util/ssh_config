@@ -1,0 +1,3 @@
+# Default ssh-agent config doesn't allow forwarding
+Host github.com
+    ForwardAgent yes

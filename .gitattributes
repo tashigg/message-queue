@@ -1,0 +1,2 @@
+# bash doesn't know what to do with carriage returns
+*.sh text eol=lf
