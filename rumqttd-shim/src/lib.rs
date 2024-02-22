@@ -47,6 +47,10 @@ impl protocol::Publish {
         self.qos
     }
 
+    pub fn set_qos(&mut self, qos: QoS) {
+        self.qos = qos;
+    }
+
     pub fn pkid(&self) -> u16 {
         self.pkid
     }

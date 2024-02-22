@@ -1,6 +1,6 @@
 use crate::mqtt::ClientId;
 use futures::StreamExt;
-use rumqttd_shim::protocol::{Filter, LastWill, LastWillProperties};
+use rumqttd_shim::protocol::{Filter, LastWill, LastWillProperties, Publish, PublishProperties};
 use std::time::Duration;
 use tashi_collections::HashMap;
 use tokio_util::time::DelayQueue;
@@ -16,7 +16,7 @@ pub(crate) struct InactiveSessions {
 }
 
 impl InactiveSessions {
-    pub fn insert(&mut self, client_id: ClientId, session: Session) {
+    pub fn save(&mut self, client_id: ClientId, session: Session) {
         let expiry_key = if let SessionExpiry::AfterConnectionClosed(duration) = session.expiry {
             Some(self.expirations.insert(client_id.clone(), duration))
         } else {
@@ -88,6 +88,37 @@ impl From<SessionExpiry> for Option<u32> {
     }
 }
 
+pub(crate) trait LastWillExt {
+    fn into_publish(self) -> Publish;
+}
+
+impl LastWillExt for LastWill {
+    fn into_publish(self) -> Publish {
+        // TODO: support retained messages TG-414
+        let mut publish = Publish::new(self.topic, self.message, false);
+        publish.set_qos(self.qos);
+        publish
+    }
+}
+
+pub(crate) trait LastWillPropertiesExt {
+    fn into_publish_properties(self) -> PublishProperties;
+}
+
+impl LastWillPropertiesExt for LastWillProperties {
+    fn into_publish_properties(self) -> PublishProperties {
+        PublishProperties {
+            payload_format_indicator: self.payload_format_indicator,
+            message_expiry_interval: self.message_expiry_interval,
+            response_topic: self.response_topic,
+            correlation_data: self.correlation_data,
+            user_properties: self.user_properties,
+            content_type: self.content_type,
+            ..Default::default()
+        }
+    }
+}
+
 // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Session_State
 #[derive(Default)]
 pub(crate) struct Session {
@@ -98,8 +129,7 @@ pub(crate) struct Session {
     /// The last will's delay can be greater than the session's expiry, but
     /// session expiry always leads to the last will being sent, dropped, or
     /// overwritten (3.1.3.2.2).
-    pub last_will: Option<LastWill>,
-    pub last_will_properties: Option<LastWillProperties>,
+    pub last_will_and_properties: Option<(LastWill, Option<LastWillProperties>)>,
     pub subscriptions: HashMap<String, Filter>,
 }
 
