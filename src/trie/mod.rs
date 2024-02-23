@@ -6,7 +6,8 @@ mod filter;
 mod node;
 mod visitor;
 
-use filter::Filter;
+pub use filter::{Filter, FilterParseError};
+
 use node::{Node, NodeId};
 
 use crate::trie::visitor::{FilterVisitor, WalkFilter};
@@ -124,19 +125,14 @@ impl<K, V> Default for Leaf<K, V> {
 pub struct TopicName<'a>(Vec<NameToken<'a>>);
 
 impl<'a> TopicName<'a> {
-    pub fn from_str(s: &'a str) -> Result<Self, ()> {
-        let res: Result<_, _> = s
-            .split('/')
-            .map(|token| {
-                if token.contains(|c| matches!(c, '#' | '+' | '\0')) {
-                    todo!("error invalid name token")
-                } else {
-                    Ok(NameToken(token))
-                }
-            })
-            .collect();
+    pub fn from_str(s: &'a str) -> Result<Self, ParseError> {
+        if let Some((idx, ch)) = s.char_indices().find(|it| matches!(it.1, '#' | '+' | '\0')) {
+            return Err(ParseError::UnexpectedCharacter { ch, idx });
+        }
 
-        res.map(Self)
+        let res = s.split('/').map(NameToken).collect();
+
+        Ok(Self(res))
     }
 }
 
@@ -144,9 +140,11 @@ impl<'a> TopicName<'a> {
 #[derive(Copy, Clone)]
 pub struct NameToken<'a>(&'a str);
 
-enum ParseError {
-    // Saw a UTF-8 `\0` character.
-    FoundNull,
+#[derive(thiserror::Error, Debug)]
+pub enum ParseError {
+    /// Found an unexpected character `ch` at `idx`.
+    #[error("unexpected character `{ch}` at {idx}`")]
+    UnexpectedCharacter { ch: char, idx: usize },
 }
 
 #[cfg(test)]
