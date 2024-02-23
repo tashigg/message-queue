@@ -61,6 +61,11 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
             .insert(key, value)
     }
 
+    pub fn visit_matches<F: FnMut(&K, &V)>(&self, topic_name: &TopicName<'_>, mut f: F) {
+        debug_assert!(!topic_name.0.is_empty(), "invalid empty topic name");
+        visitor::VisitMatches::new(&topic_name.0, &mut f).visit_node(&self.nodes, self.root)
+    }
+
     pub fn remove(&mut self, filter: Filter, key: &K) -> Option<V> {
         let leaf_kind = filter.leaf_kind;
         let mut visitor = WalkFilter::new(filter);
@@ -116,10 +121,157 @@ impl<K, V> Default for Leaf<K, V> {
     }
 }
 
+pub struct TopicName<'a>(Vec<NameToken<'a>>);
+
+impl<'a> TopicName<'a> {
+    pub fn from_str(s: &'a str) -> Result<Self, ()> {
+        let res: Result<_, _> = s
+            .split('/')
+            .map(|token| {
+                if token.contains(|c| matches!(c, '#' | '+' | '\0')) {
+                    todo!("error invalid name token")
+                } else {
+                    Ok(NameToken(token))
+                }
+            })
+            .collect();
+
+        res.map(Self)
+    }
+}
+
 /// A UTF-8 string containing no `\0` characters nor any operators.
-struct NameToken<'a>(&'a str);
+#[derive(Copy, Clone)]
+pub struct NameToken<'a>(&'a str);
 
 enum ParseError {
     // Saw a UTF-8 `\0` character.
     FoundNull,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::filter::Filter;
+    use super::{FilterTrieMultiMap, TopicName};
+
+    #[test]
+    fn insert_remove() {
+        #[derive(Eq, PartialEq)]
+        struct NoClone<T>(T);
+        let filter: Filter = "foo/bar".parse().unwrap();
+        let mut trie = FilterTrieMultiMap::new();
+        trie.insert(filter.clone(), 0, NoClone(0));
+
+        assert_eq!(trie.remove(filter.clone(), &0).map(|it| it.0), Some(0));
+
+        let values = [
+            ("foo", 0),
+            ("foo/bar", 0),
+            ("foo/baz", 0),
+            ("foo/#", 0),
+            ("foo/baz", 1),
+            ("#", 2),
+        ];
+
+        for (idx, &(filter, key)) in values.clone().iter().enumerate() {
+            trie.insert(filter.parse().unwrap(), key, NoClone(idx as i32 + 1));
+        }
+
+        for (idx, &(filter, key)) in values.iter().enumerate() {
+            assert_eq!(
+                trie.remove(filter.parse().unwrap(), &key).map(|it| it.0),
+                Some(idx as i32 + 1)
+            );
+        }
+    }
+
+    #[track_caller]
+    fn matches_sorted<V: Ord + Copy>(
+        trie: &FilterTrieMultiMap<i32, V>,
+        topic_name: &str,
+    ) -> Vec<V> {
+        let mut seen = Vec::new();
+
+        trie.visit_matches(&TopicName::from_str(topic_name).unwrap(), |_k, v| {
+            seen.push(*v);
+        });
+
+        seen.sort();
+
+        seen
+    }
+
+    #[test]
+    fn all_matches() {
+        let values = [
+            ("foo", 0),
+            ("foo/bar", 0),
+            ("foo/baz", 0),
+            ("+/bar", 1),
+            ("foo/#", 0),
+            ("foo/baz", 1),
+            ("#", 2),
+            ("foo//", 0),
+            ("/+", 0),
+        ];
+
+        let mut trie = FilterTrieMultiMap::new();
+
+        for &(filter, key) in values.clone().iter() {
+            trie.insert(filter.parse().unwrap(), key, filter);
+        }
+
+        expect_test::expect![[r##"
+            [
+                "#",
+                "+/bar",
+                "foo/#",
+                "foo/bar",
+            ]
+        "##]]
+        .assert_debug_eq(&matches_sorted(&trie, "foo/bar"));
+
+        expect_test::expect![[r##"
+            [
+                "#",
+                "foo/#",
+                "foo/baz",
+                "foo/baz",
+            ]
+        "##]]
+        .assert_debug_eq(&matches_sorted(&trie, "foo/baz"));
+
+        expect_test::expect![[r##"
+            [
+                "#",
+                "foo",
+            ]
+        "##]]
+        .assert_debug_eq(&matches_sorted(&trie, "foo"));
+
+        expect_test::expect![[r##"
+            [
+                "#",
+                "+/bar",
+            ]
+        "##]]
+        .assert_debug_eq(&matches_sorted(&trie, "bar$/bar"));
+
+        expect_test::expect![[r##"
+            [
+                "#",
+            ]
+        "##]]
+        .assert_debug_eq(&matches_sorted(&trie, "bar$"));
+
+        expect_test::expect![].assert_debug_eq(&matches_sorted(&trie, "/nested-0"));
+
+        expect_test::expect![[r##"
+            [
+                "#",
+                "foo/#",
+            ]
+        "##]]
+        .assert_debug_eq(&matches_sorted(&trie, "foo/"));
+    }
 }

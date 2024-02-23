@@ -4,7 +4,7 @@ use slotmap::SlotMap;
 
 use super::filter::FilterToken;
 use super::node::{Node, NodeId};
-use super::Leaf;
+use super::{Leaf, NameToken};
 
 pub(super) type VisitContext<K, V> = SlotMap<NodeId, Node<K, V>>;
 
@@ -69,4 +69,52 @@ pub(super) struct NodePlace {
     pub(super) parent_id: NodeId,
     pub(super) token: FilterToken,
     pub(super) idx: usize,
+}
+
+/// Visits all filters that match the topic in an unspecified order.
+/// All matching topics will be visited exactly once.
+pub(super) struct VisitMatches<'a, 'b: 'a, F> {
+    topic_name: &'a [NameToken<'b>],
+    callback: &'a mut F,
+}
+
+impl<'a, 'b: 'a, F: 'a> VisitMatches<'a, 'b, F> {
+    pub(super) fn new(topic_name: &'a [NameToken<'b>], callback: &'a mut F) -> Self {
+        Self {
+            topic_name,
+            callback,
+        }
+    }
+}
+
+impl<'a, 'b: 'a, K, V, F: FnMut(&K, &V)> FilterVisitor<(), K, V> for VisitMatches<'a, 'b, F> {
+    fn visit_node(&mut self, cx: &VisitContext<K, V>, node_id: NodeId) {
+        let node = &cx[node_id];
+
+        let Some((&next, rest)) = self.topic_name.split_first() else {
+            if let Some(leaf) = &node.leaf {
+                self.visit_leaf(leaf, node_id)
+            }
+
+            return;
+        };
+
+        // important note: `descendant_leaf` is tacked onto this node because there's no node that makes sense to do so otherwise.
+        // However, it doesn't match when an exact match would. `foo/#` (Filter) doesn't match `foo` (Topic name), but `foo` (Filter) would.
+        if let Some(leaf) = &node.base.descendant_leaf {
+            self.visit_leaf(leaf, node_id)
+        }
+
+        let mut visitor = VisitMatches::new(rest, &mut *self.callback);
+
+        for (_, node_id) in node.base.filters.iter().filter(|it| it.0.matches(next)) {
+            visitor.visit_node(cx, *node_id);
+        }
+    }
+
+    fn visit_leaf(&mut self, leaf: &Leaf<K, V>, _node_id: NodeId) {
+        for (k, v) in leaf.0.iter() {
+            (&mut self.callback)(k, v)
+        }
+    }
 }

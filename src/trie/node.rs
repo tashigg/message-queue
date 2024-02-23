@@ -10,8 +10,8 @@ slotmap::new_key_type! { pub(super) struct NodeId; }
 pub(super) struct InternalNode<K, V> {
     pub(super) filters: Vec<(FilterToken, NodeId)>,
 
-    /// Matches if we reach here.
-    pub(super) any_leaf: Option<Leaf<K, V>>,
+    /// Matches a topic when .
+    pub(super) descendant_leaf: Option<Leaf<K, V>>,
 }
 
 // this can't be a derive, derive uses type bounds, but all of these defaults don't need the type bound.
@@ -19,7 +19,7 @@ impl<K, V> Default for InternalNode<K, V> {
     fn default() -> Self {
         Self {
             filters: Default::default(),
-            any_leaf: Default::default(),
+            descendant_leaf: Default::default(),
         }
     }
 }
@@ -52,7 +52,7 @@ impl<K, V> Node<K, V> {
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.base.filters.is_empty() && self.base.any_leaf.is_none() && self.leaf.is_none()
+        self.base.filters.is_empty() && self.base.descendant_leaf.is_none() && self.leaf.is_none()
     }
 }
 
@@ -62,7 +62,7 @@ impl<K, V> Index<LeafKind> for Node<K, V> {
     fn index(&self, index: LeafKind) -> &Self::Output {
         match index {
             LeafKind::Exact => &self.leaf,
-            LeafKind::Any => &self.base.any_leaf,
+            LeafKind::Any => &self.base.descendant_leaf,
         }
     }
 }
@@ -71,7 +71,7 @@ impl<K, V> IndexMut<LeafKind> for Node<K, V> {
     fn index_mut(&mut self, index: LeafKind) -> &mut Self::Output {
         match index {
             LeafKind::Exact => &mut self.leaf,
-            LeafKind::Any => &mut self.base.any_leaf,
+            LeafKind::Any => &mut self.base.descendant_leaf,
         }
     }
 }
