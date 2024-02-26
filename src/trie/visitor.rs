@@ -114,7 +114,7 @@ impl<'a, 'b: 'a, K, V, F: FnMut(&K, &V)> FilterVisitor<(), K, V> for VisitMatche
 
     fn visit_leaf(&mut self, leaf: &Leaf<K, V>, _node_id: NodeId) {
         for (k, v) in leaf.0.iter() {
-            (&mut self.callback)(k, v)
+            (self.callback)(k, v)
         }
     }
 }
