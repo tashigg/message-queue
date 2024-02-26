@@ -262,7 +262,12 @@ mod tests {
         "##]]
         .assert_debug_eq(&matches_sorted(&trie, "bar$"));
 
-        expect_test::expect![].assert_debug_eq(&matches_sorted(&trie, "/nested-0"));
+        expect_test::expect![[r##"
+            [
+                "#",
+                "/+",
+            ]
+        "##]].assert_debug_eq(&matches_sorted(&trie, "/nested-0"));
 
         expect_test::expect![[r##"
             [
