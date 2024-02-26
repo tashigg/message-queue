@@ -203,7 +203,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
             .insert(key, value)
     }
 
-    pub fn visit_matches<F: FnMut(&K, &V)>(&self, topic_name: &TopicName<'_>, mut f: F) {
+    pub fn visit_matches(&self, topic_name: &TopicName<'_>, mut f: impl FnMut(&K, &V)) {
         debug_assert!(!topic_name.0.is_empty(), "invalid empty topic name");
         visitor::VisitMatches::new(&topic_name.0, &mut f).visit_node(&self.nodes, self.root)
     }
