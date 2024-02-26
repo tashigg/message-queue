@@ -1,4 +1,5 @@
 use slotmap::SlotMap;
+use std::fmt::{Debug, Write};
 use std::hash::Hash;
 
 mod filter;
@@ -9,11 +10,154 @@ pub use filter::{Filter, FilterParseError};
 
 use node::{Data, Node, NodeId};
 
+use crate::trie::filter::{FilterToken, LeafKind};
 use crate::trie::visitor::{FilterVisitor, WalkFilter};
 
 pub struct FilterTrieMultiMap<K, V> {
     root: NodeId,
     nodes: SlotMap<NodeId, Node<K, V>>,
+}
+
+impl<K, V> Debug for FilterTrieMultiMap<K, V>
+where
+    Data<K, V>: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut debug_map = f.debug_map();
+
+        #[derive(Clone, Copy)]
+        enum State {
+            Initial { root: NodeId },
+            Running { last: NodeId },
+        }
+        struct Iter<'a, K, V> {
+            state: State,
+            nodes: &'a SlotMap<NodeId, Node<K, V>>,
+        }
+
+        // fixme: This iterator is very inefficient (O(n) scans per tree depth) but it probably doesn't matter because this is a Debug impl.
+        // it's O(1) memory usage though.
+        impl<'a, K, V> Iterator for Iter<'a, K, V> {
+            type Item = NodeId;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                fn walk_down<K, V>(
+                    mut current: NodeId,
+                    nodes: &SlotMap<NodeId, Node<K, V>>,
+                ) -> NodeId {
+                    while let Some(child) = nodes[current].filters.first() {
+                        current = child.1;
+                    }
+
+                    current
+                }
+
+                let last = match self.state {
+                    State::Initial { root } => {
+                        let current = walk_down(root, &self.nodes);
+
+                        self.state = State::Running { last: current };
+
+                        return Some(current);
+                    }
+                    State::Running { last } => last,
+                };
+
+                let node = &self.nodes[last];
+                if node.is_root() {
+                    return None;
+                }
+
+                let parent = node.parent;
+                let node = &self.nodes[parent];
+                // find the location of `last` in parent.
+                let idx = node.filters.iter().position(|(_, it)| *it == last).unwrap();
+
+                // if parent has any more children, descend into them.
+                if let Some(next) = node.filters.get(idx + 1) {
+                    let current = walk_down(next.1, &self.nodes);
+
+                    self.state = State::Running { last: current };
+
+                    return Some(current);
+                }
+
+                // otherwise just return that node (post-order).
+                self.state = State::Running { last: parent };
+
+                Some(parent)
+            }
+        }
+
+        fn walk_up<K, V>(node: NodeId, nodes: &SlotMap<NodeId, Node<K, V>>) -> Vec<FilterToken> {
+            let mut current = node;
+            let mut tokens = Vec::new();
+            while !nodes[current].is_root() {
+                let parent = nodes[current].parent;
+                let token = &nodes[parent]
+                    .filters
+                    .iter()
+                    .find(|it| it.1 == current)
+                    .unwrap()
+                    .0;
+
+                tokens.push(token.clone());
+                current = parent;
+            }
+
+            tokens.reverse();
+            tokens
+        }
+
+        struct DebugFilter<'a>(&'a [FilterToken], LeafKind);
+
+        impl Debug for DebugFilter<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_char('"')?;
+                let mut needs_sep = false;
+                for token in self.0 {
+                    if needs_sep {
+                        f.write_char('/')?;
+                    }
+                    match token {
+                        FilterToken::Literal(it) => write!(f, "{}", it.escape_debug())?,
+                        FilterToken::WildPlus => f.write_char('+')?,
+                    }
+
+                    needs_sep = true;
+                }
+
+                if matches!(self.1, LeafKind::Any) {
+                    if needs_sep {
+                        f.write_char('/')?;
+                    }
+                    f.write_str("#")?;
+                }
+
+                f.write_char('"')
+            }
+        }
+
+        let iter = Iter {
+            state: State::Initial { root: self.root },
+            nodes: &self.nodes,
+        };
+
+        for node_id in iter {
+            let tokens = walk_up(node_id, &self.nodes);
+
+            let node = &self.nodes[node_id];
+            if let Some(descendant) = &node[LeafKind::Any] {
+                debug_map.entry(&DebugFilter(&tokens, LeafKind::Any), descendant);
+            }
+
+            if let Some(exact) = &node[LeafKind::Exact] {
+                debug_map.entry(&DebugFilter(&tokens, LeafKind::Exact), exact);
+            }
+        }
+
+        debug_map.finish()
+    }
 }
 
 impl<K, V> FilterTrieMultiMap<K, V> {
@@ -272,5 +416,57 @@ mod tests {
             ]
         "##]]
         .assert_debug_eq(&matches_sorted(&trie, "foo/"));
+    }
+
+    #[test]
+    fn debug() {
+        let values = [
+            ("foo", 0),
+            ("foo/bar", 0),
+            ("foo/baz", 0),
+            ("+/bar", 1),
+            ("foo/#", 0),
+            ("foo/baz", 1),
+            ("#", 2),
+            ("foo//", 0),
+            ("/+", 0),
+        ];
+
+        let mut trie = FilterTrieMultiMap::new();
+
+        for &(filter, key) in values.clone().iter() {
+            trie.insert(filter.parse().unwrap(), key, filter);
+        }
+
+        expect_test::expect![[r##"
+            {
+                "/+": {
+                    0: "/+",
+                },
+                "foo//": {
+                    0: "foo//",
+                },
+                "foo/bar": {
+                    0: "foo/bar",
+                },
+                "foo/baz": {
+                    0: "foo/baz",
+                    1: "foo/baz",
+                },
+                "foo/#": {
+                    0: "foo/#",
+                },
+                "foo": {
+                    0: "foo",
+                },
+                "+/bar": {
+                    1: "+/bar",
+                },
+                "#": {
+                    2: "#",
+                },
+            }
+        "##]]
+        .assert_debug_eq(&trie);
     }
 }
