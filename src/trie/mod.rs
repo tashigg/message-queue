@@ -125,7 +125,7 @@ impl<K, V> Default for Leaf<K, V> {
 pub struct TopicName<'a>(Vec<NameToken<'a>>);
 
 impl<'a> TopicName<'a> {
-    pub fn from_str(s: &'a str) -> Result<Self, ParseError> {
+    pub fn parse(s: &'a str) -> Result<Self, ParseError> {
         if let Some((idx, ch)) = s.char_indices().find(|it| matches!(it.1, '#' | '+' | '\0')) {
             return Err(ParseError::UnexpectedCharacter { ch, idx });
         }
@@ -133,6 +133,13 @@ impl<'a> TopicName<'a> {
         let res = s.split('/').map(NameToken).collect();
 
         Ok(Self(res))
+    }
+}
+impl<'a> TryFrom<&'a str> for TopicName<'a> {
+    type Error = ParseError;
+
+    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
+        Self::parse(value)
     }
 }
 
@@ -190,7 +197,7 @@ mod tests {
     ) -> Vec<V> {
         let mut seen = Vec::new();
 
-        trie.visit_matches(&TopicName::from_str(topic_name).unwrap(), |_k, v| {
+        trie.visit_matches(&TopicName::parse(topic_name).unwrap(), |_k, v| {
             seen.push(*v);
         });
 
