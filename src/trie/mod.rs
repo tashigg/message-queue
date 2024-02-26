@@ -54,7 +54,7 @@ where
 
                 let last = match self.state {
                     State::Initial { root } => {
-                        let current = walk_down(root, &self.nodes);
+                        let current = walk_down(root, self.nodes);
 
                         self.state = State::Running { last: current };
 
@@ -75,7 +75,7 @@ where
 
                 // if parent has any more children, descend into them.
                 if let Some(next) = node.filters.get(idx + 1) {
-                    let current = walk_down(next.1, &self.nodes);
+                    let current = walk_down(next.1, self.nodes);
 
                     self.state = State::Running { last: current };
 
