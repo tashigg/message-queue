@@ -2,15 +2,15 @@ use std::vec;
 
 use slotmap::SlotMap;
 
-use super::filter::FilterToken;
+use super::filter::{FilterToken, LeafKind};
 use super::node::{Node, NodeId};
-use super::{Leaf, NameToken};
+use super::{Data, NameToken};
 
 pub(super) type VisitContext<K, V> = SlotMap<NodeId, Node<K, V>>;
 
 pub(super) trait FilterVisitor<T, K, V> {
     fn visit_node(&mut self, cx: &VisitContext<K, V>, node_id: NodeId) -> T;
-    fn visit_leaf(&mut self, leaf: &Leaf<K, V>, node_id: NodeId) -> T;
+    fn visit_data(&mut self, leaf: &Data<K, V>, node_id: NodeId) -> T;
 }
 
 /// A resumable visitor to walk down a filter path.
@@ -58,7 +58,7 @@ impl<K, V> FilterVisitor<Result<NodeId, NodePlace>, K, V> for WalkFilter {
         Ok(node_id)
     }
 
-    fn visit_leaf(&mut self, _leaf: &Leaf<K, V>, _node_id: NodeId) -> Result<NodeId, NodePlace> {
+    fn visit_data(&mut self, _leaf: &Data<K, V>, _node_id: NodeId) -> Result<NodeId, NodePlace> {
         unimplemented!()
     }
 }
@@ -91,8 +91,8 @@ impl<'a, 'b: 'a, K, V, F: FnMut(&K, &V)> FilterVisitor<(), K, V> for VisitMatche
         let node = &cx[node_id];
 
         let Some((&next, rest)) = self.topic_name.split_first() else {
-            if let Some(leaf) = &node.leaf {
-                self.visit_leaf(leaf, node_id)
+            if let Some(leaf) = &node[LeafKind::Exact] {
+                self.visit_data(leaf, node_id)
             }
 
             return;
@@ -100,8 +100,8 @@ impl<'a, 'b: 'a, K, V, F: FnMut(&K, &V)> FilterVisitor<(), K, V> for VisitMatche
 
         // important note: `descendant_leaf` is tacked onto this node because there's no node that makes sense to do so otherwise.
         // However, it doesn't match when an exact match would. `foo/#` (Filter) doesn't match `foo` (Topic name), but `foo` (Filter) would.
-        if let Some(leaf) = &node.descendant_leaf {
-            self.visit_leaf(leaf, node_id)
+        if let Some(leaf) = &node[LeafKind::Any] {
+            self.visit_data(leaf, node_id)
         }
 
         let mut visitor = VisitMatches::new(rest, &mut *self.callback);
@@ -111,7 +111,7 @@ impl<'a, 'b: 'a, K, V, F: FnMut(&K, &V)> FilterVisitor<(), K, V> for VisitMatche
         }
     }
 
-    fn visit_leaf(&mut self, leaf: &Leaf<K, V>, _node_id: NodeId) {
+    fn visit_data(&mut self, leaf: &Data<K, V>, _node_id: NodeId) {
         for (k, v) in leaf.iter() {
             (self.callback)(k, v)
         }

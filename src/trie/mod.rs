@@ -7,7 +7,7 @@ mod visitor;
 
 pub use filter::{Filter, FilterParseError};
 
-use node::{Leaf, Node, NodeId};
+use node::{Data, Node, NodeId};
 
 use crate::trie::visitor::{FilterVisitor, WalkFilter};
 
