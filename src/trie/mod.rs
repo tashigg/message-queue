@@ -1,6 +1,5 @@
 use slotmap::SlotMap;
 use std::hash::Hash;
-use tashi_collections::HashMap;
 
 mod filter;
 mod node;
@@ -8,7 +7,7 @@ mod visitor;
 
 pub use filter::{Filter, FilterParseError};
 
-use node::{Node, NodeId};
+use node::{Leaf, Node, NodeId};
 
 use crate::trie::visitor::{FilterVisitor, WalkFilter};
 
@@ -48,7 +47,6 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
                 Err(place) => {
                     let new_id = self.nodes.insert(Node::new(place.parent_id));
                     self.nodes[place.parent_id]
-                        .base
                         .filters
                         .insert(place.idx, (place.token, new_id));
                     current = new_id;
@@ -58,7 +56,6 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
 
         self.nodes[end][leaf_kind]
             .get_or_insert_with(Default::default)
-            .0
             .insert(key, value)
     }
 
@@ -78,7 +75,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
 
         let leaf = &mut end[leaf_kind];
 
-        let ret = leaf.as_mut()?.0.remove(key);
+        let ret = leaf.as_mut()?.remove(key);
 
         // this loop nees to be weirdly split over iterations,
         // iteratively remove nodes from the trie until we find either the root or a non empty node.
@@ -99,26 +96,17 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
 
             // the expect here failing implies that the node has a different parent than what it thinks,
             let idx = self.nodes[new]
-                .base
                 .filters
                 .iter()
                 .position(|it| it.1 == current)
                 .expect("orphaned node reached through parent");
 
-            self.nodes[new].base.filters.remove(idx);
+            self.nodes[new].filters.remove(idx);
 
             current = new
         }
 
         ret
-    }
-}
-
-struct Leaf<K, V>(HashMap<K, V>);
-
-impl<K, V> Default for Leaf<K, V> {
-    fn default() -> Self {
-        Self(Default::default())
     }
 }
 
@@ -145,7 +133,7 @@ impl<'a> TryFrom<&'a str> for TopicName<'a> {
 
 /// A UTF-8 string containing no `\0` characters nor any operators.
 #[derive(Copy, Clone)]
-pub struct NameToken<'a>(&'a str);
+struct NameToken<'a>(&'a str);
 
 #[derive(thiserror::Error, Debug)]
 pub enum ParseError {
@@ -274,7 +262,8 @@ mod tests {
                 "#",
                 "/+",
             ]
-        "##]].assert_debug_eq(&matches_sorted(&trie, "/nested-0"));
+        "##]]
+        .assert_debug_eq(&matches_sorted(&trie, "/nested-0"));
 
         expect_test::expect![[r##"
             [

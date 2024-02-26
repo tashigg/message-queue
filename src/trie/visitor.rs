@@ -43,7 +43,6 @@ impl<K, V> FilterVisitor<Result<NodeId, NodePlace>, K, V> for WalkFilter {
             let node = &cx[node_id];
 
             let idx = node
-                .base
                 .filters
                 .binary_search_by_key(&&token, |it| &it.0)
                 .map_err(|idx| NodePlace {
@@ -52,7 +51,7 @@ impl<K, V> FilterVisitor<Result<NodeId, NodePlace>, K, V> for WalkFilter {
                     idx,
                 })?;
 
-            node_id = node.base.filters[idx].1;
+            node_id = node.filters[idx].1;
         }
 
         // we ran out of filters this is the node.
@@ -101,19 +100,19 @@ impl<'a, 'b: 'a, K, V, F: FnMut(&K, &V)> FilterVisitor<(), K, V> for VisitMatche
 
         // important note: `descendant_leaf` is tacked onto this node because there's no node that makes sense to do so otherwise.
         // However, it doesn't match when an exact match would. `foo/#` (Filter) doesn't match `foo` (Topic name), but `foo` (Filter) would.
-        if let Some(leaf) = &node.base.descendant_leaf {
+        if let Some(leaf) = &node.descendant_leaf {
             self.visit_leaf(leaf, node_id)
         }
 
         let mut visitor = VisitMatches::new(rest, &mut *self.callback);
 
-        for (_, node_id) in node.base.filters.iter().filter(|it| it.0.matches(next)) {
+        for (_, node_id) in node.filters.iter().filter(|it| it.0.matches(next)) {
             visitor.visit_node(cx, *node_id);
         }
     }
 
     fn visit_leaf(&mut self, leaf: &Leaf<K, V>, _node_id: NodeId) {
-        for (k, v) in leaf.0.iter() {
+        for (k, v) in leaf.iter() {
             (self.callback)(k, v)
         }
     }
