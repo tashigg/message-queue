@@ -8,7 +8,7 @@ use rand::seq::IteratorRandom;
 use tashi_collections::HashMap;
 
 use crate::cli::LogFormat;
-use crate::config::users::{User, Users};
+use crate::config::users::{AuthConfig, User, UsersConfig};
 
 const DEFAULT_PASSWORD_LEN: usize = 12;
 
@@ -211,7 +211,7 @@ fn add_user_interactively(args: AddUserArgs) -> crate::Result<()> {
     // It didn't seem important for `write_mode` to be prompted for interactively.
     //
     // The default of `append` should almost always be suitable.
-    let file = match args.write_mode {
+    let mut file = match args.write_mode {
         WriteMode::Append => OpenOptions::new()
             .create(true)
             .append(true)
@@ -219,6 +219,11 @@ fn add_user_interactively(args: AddUserArgs) -> crate::Result<()> {
         WriteMode::Truncate => File::create(&output_file),
     }
     .wrap_err_with(|| format!("error opening {} for writing", output_file.display()))?;
+
+    if file.metadata().is_ok_and(|meta| meta.len() > 0) {
+        // If the file is not empty, add a blank line before the entry for readability.
+        file.write_all(b"\n")?;
+    }
 
     generate_user_record(username, password.as_bytes(), file)?;
 
@@ -238,12 +243,14 @@ fn generate_user_record(
         .wrap_err("error hashing password")?
         .to_string();
 
-    let users_toml = toml::to_string(&Users {
+    let users_toml = toml::to_string(&UsersConfig {
         by_username: HashMap::from_iter([(username, User { password_hash })]),
+        auth: AuthConfig::default(),
     })
     .wrap_err("error serializing user record to TOML")?;
 
-    writeln!(output, "{users_toml}")?;
+    // The TOML has a trailing newline already.
+    output.write_all(users_toml.as_bytes())?;
 
     Ok(())
 }

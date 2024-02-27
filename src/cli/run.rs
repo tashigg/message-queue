@@ -9,7 +9,7 @@ use tashi_consensus_engine::{Platform, SecretKey};
 use crate::cli::LogFormat;
 use crate::config;
 use crate::config::addresses::Addresses;
-use crate::config::users::Users;
+use crate::config::users::{AuthConfig, UsersConfig};
 use crate::mqtt::broker::MqttBroker;
 
 #[derive(clap::Args, Clone, Debug)]
@@ -22,6 +22,9 @@ pub struct RunArgs {
 
     #[clap(short = 'T', long, default_value = "0.0.0.0:49213")]
     pub tce_listen_addr: SocketAddr,
+
+    #[command(flatten)]
+    pub auth_config: AuthConfig,
 
     #[command(flatten)]
     pub secret_key: SecretKeyOpt,
@@ -69,7 +72,10 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
     // File and stdio aren't truly async in Tokio so we might as well do that before we even start the runtime
     let addresses = config::addresses::read(&args.config_dir.join("address-book.toml"))?;
 
-    let users = config::users::read(&args.config_dir.join("users.toml"))?;
+    let mut users = config::users::read(&args.config_dir.join("users.toml"))?;
+
+    // Merge any auth overrides from the command-line.
+    users.auth.merge(&args.auth_config);
 
     let tce_config =
         create_tce_config(&args, &addresses).wrap_err("error initializing TCE config")?;
@@ -81,7 +87,7 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
 #[tokio::main]
 async fn main_async(
     args: RunArgs,
-    users: Users,
+    users: UsersConfig,
     tce_config: tashi_consensus_engine::Config,
 ) -> crate::Result<()> {
     let (tce_platform, _tce_message_stream) = Platform::start(
