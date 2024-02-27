@@ -10,8 +10,8 @@ pub use filter::{Filter, FilterParseError};
 
 use node::{Data, Node, NodeId};
 
-use crate::trie::filter::{FilterToken, LeafKind};
-use crate::trie::visitor::WalkFilter;
+use crate::mqtt::trie::filter::{FilterToken, LeafKind};
+use crate::mqtt::trie::visitor::WalkFilter;
 
 pub struct FilterTrieMultiMap<K, V> {
     root: NodeId,
