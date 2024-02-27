@@ -8,17 +8,12 @@ use super::{Data, NameToken};
 
 pub(super) type VisitContext<K, V> = SlotMap<NodeId, Node<K, V>>;
 
-pub(super) trait FilterVisitor<T, K, V> {
-    fn visit_node(&mut self, cx: &VisitContext<K, V>, node_id: NodeId) -> T;
-    fn visit_data(&mut self, leaf: &Data<K, V>, node_id: NodeId) -> T;
-}
-
 /// A resumable visitor to walk down a filter path.
 ///
 /// Note: Resumable in this context means that if the visitor returns an error,
 /// inserting a node at given [`NodePlace`] then calling [`visit_node`] again with the newly inserted node continues the walk where it left off.
 ///
-/// [`visit_node`]: FilterVisitor::visit_node
+/// [`visit_node`]: WalkFilter::visit_node
 pub(super) struct WalkFilter(vec::IntoIter<FilterToken>);
 
 impl WalkFilter {
@@ -29,10 +24,8 @@ impl WalkFilter {
         );
         Self(filter.tokens.into_iter())
     }
-}
 
-impl<K, V> FilterVisitor<Result<NodeId, NodePlace>, K, V> for WalkFilter {
-    fn visit_node(
+    pub(super) fn visit_node<K, V>(
         &mut self,
         cx: &VisitContext<K, V>,
         node_id: NodeId,
@@ -57,10 +50,6 @@ impl<K, V> FilterVisitor<Result<NodeId, NodePlace>, K, V> for WalkFilter {
         // we ran out of filters this is the node.
         Ok(node_id)
     }
-
-    fn visit_data(&mut self, _leaf: &Data<K, V>, _node_id: NodeId) -> Result<NodeId, NodePlace> {
-        unimplemented!()
-    }
 }
 
 /// An identification on where to insert a node if it's missing.
@@ -84,15 +73,16 @@ impl<'a, 'b: 'a, F: 'a> VisitMatches<'a, 'b, F> {
             callback,
         }
     }
-}
 
-impl<'a, 'b: 'a, K, V, F: FnMut(&K, &V)> FilterVisitor<(), K, V> for VisitMatches<'a, 'b, F> {
-    fn visit_node(&mut self, cx: &VisitContext<K, V>, node_id: NodeId) {
+    pub(super) fn visit_node<K, V>(&mut self, cx: &VisitContext<K, V>, node_id: NodeId)
+    where
+        F: FnMut(&K, &V),
+    {
         let node = &cx[node_id];
 
         let Some((&next, rest)) = self.topic_name.split_first() else {
             if let Some(leaf) = &node[LeafKind::Exact] {
-                self.visit_data(leaf, node_id)
+                self.visit_data(leaf)
             }
 
             return;
@@ -101,7 +91,7 @@ impl<'a, 'b: 'a, K, V, F: FnMut(&K, &V)> FilterVisitor<(), K, V> for VisitMatche
         // important note: `descendant_leaf` is tacked onto this node because there's no node that makes sense to do so otherwise.
         // However, it doesn't match when an exact match would. `foo/#` (Filter) doesn't match `foo` (Topic name), but `foo` (Filter) would.
         if let Some(leaf) = &node[LeafKind::Any] {
-            self.visit_data(leaf, node_id)
+            self.visit_data(leaf)
         }
 
         let mut visitor = VisitMatches::new(rest, &mut *self.callback);
@@ -111,7 +101,10 @@ impl<'a, 'b: 'a, K, V, F: FnMut(&K, &V)> FilterVisitor<(), K, V> for VisitMatche
         }
     }
 
-    fn visit_data(&mut self, leaf: &Data<K, V>, _node_id: NodeId) {
+    fn visit_data<K, V>(&mut self, leaf: &Data<K, V>)
+    where
+        F: FnMut(&K, &V),
+    {
         for (k, v) in leaf.iter() {
             (self.callback)(k, v)
         }

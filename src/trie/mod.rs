@@ -11,7 +11,7 @@ pub use filter::{Filter, FilterParseError};
 use node::{Data, Node, NodeId};
 
 use crate::trie::filter::{FilterToken, LeafKind};
-use crate::trie::visitor::{FilterVisitor, WalkFilter};
+use crate::trie::visitor::WalkFilter;
 
 pub struct FilterTrieMultiMap<K, V> {
     root: NodeId,
@@ -416,57 +416,5 @@ mod tests {
             ]
         "##]]
         .assert_debug_eq(&matches_sorted(&trie, "foo/"));
-    }
-
-    #[test]
-    fn debug() {
-        let values = [
-            ("foo", 0),
-            ("foo/bar", 0),
-            ("foo/baz", 0),
-            ("+/bar", 1),
-            ("foo/#", 0),
-            ("foo/baz", 1),
-            ("#", 2),
-            ("foo//", 0),
-            ("/+", 0),
-        ];
-
-        let mut trie = FilterTrieMultiMap::new();
-
-        for &(filter, key) in values.clone().iter() {
-            trie.insert(filter.parse().unwrap(), key, filter);
-        }
-
-        expect_test::expect![[r##"
-            {
-                "/+": {
-                    0: "/+",
-                },
-                "foo//": {
-                    0: "foo//",
-                },
-                "foo/bar": {
-                    0: "foo/bar",
-                },
-                "foo/baz": {
-                    0: "foo/baz",
-                    1: "foo/baz",
-                },
-                "foo/#": {
-                    0: "foo/#",
-                },
-                "foo": {
-                    0: "foo",
-                },
-                "+/bar": {
-                    1: "+/bar",
-                },
-                "#": {
-                    2: "#",
-                },
-            }
-        "##]]
-        .assert_debug_eq(&trie);
     }
 }
