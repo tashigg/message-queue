@@ -29,8 +29,25 @@ pub mod segments;
 
 pub use router::{shared_subs::Strategy, Router, RouterConfig};
 
+use crate::protocol::QoS;
 use router::{ConnectionId, Filter, Notification, RouterId, Topic};
 use segments::Storage;
 
 type Cursor = (u64, u64);
 type Offset = (u64, u64);
+
+impl protocol::Publish {
+    // Getters for crate-private fields
+
+    pub fn dup(&self) -> bool {
+        self.dup
+    }
+
+    pub fn qos(&self) -> QoS {
+        self.qos
+    }
+
+    pub fn pkid(&self) -> u16 {
+        self.pkid
+    }
+}
