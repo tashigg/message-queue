@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -18,7 +19,7 @@ use rumqttd_shim::protocol::{
     PubAck, PubAckReason, PubRec, PubRecReason, Publish, PublishProperties,
 };
 
-use crate::config::users::Users;
+use crate::config::users::UsersConfig;
 use crate::mqtt::protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
     DisconnectReasonCode, Packet, PingResp, Protocol, QoS, SubAck, SubscribeReasonCode, UnsubAck,
@@ -87,7 +88,7 @@ enum BrokerEvent {
 
 struct Shared {
     password_hasher: PasswordHashingPool,
-    users: Users,
+    users: UsersConfig,
     broker_tx: mpsc::Sender<BrokerEvent>,
     platform: Arc<Platform>,
 }
@@ -95,7 +96,7 @@ struct Shared {
 impl MqttBroker {
     pub async fn bind(
         listen_addr: SocketAddr,
-        users: Users,
+        users: UsersConfig,
         platform: Arc<Platform>,
     ) -> crate::Result<Self> {
         let listener = TcpListener::bind(listen_addr)
@@ -420,14 +421,17 @@ impl Connection {
         let Packet::Connect(connect, connect_properties, last_will, last_will_properties, login) =
             packet
         else {
-            // MQTT-3.1.0-1
-            self.disconnect(
-                DisconnectReasonCode::ProtocolError,
-                "expected CONNECT packet",
-            )
-            .await?;
-
-            return Ok(());
+            // The MQTT spec actually recommends not responding if anything goes wrong with
+            // CONNECT handling, as it could accidentally advertise the presence of an MQTT server
+            // to a port scanner.
+            //
+            // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901073
+            return self
+                .disconnect_on_connect_error(
+                    ConnectReturnCode::ProtocolError,
+                    "expected CONNECT packet",
+                )
+                .await;
         };
 
         tracing::trace!(?packet, "received");
@@ -447,7 +451,7 @@ impl Connection {
         if let Some(login) = login {
             let Some(user) = self.shared.users.by_username.get(&login.username) else {
                 return self
-                    .disconnect(DisconnectReasonCode::NotAuthorized, "")
+                    .disconnect_on_connect_error(ConnectReturnCode::NotAuthorized, "unknown user")
                     .await;
             };
 
@@ -459,9 +463,19 @@ impl Connection {
 
             if !verified {
                 return self
-                    .disconnect(DisconnectReasonCode::NotAuthorized, "")
+                    .disconnect_on_connect_error(
+                        ConnectReturnCode::NotAuthorized,
+                        "invalid password",
+                    )
                     .await;
             }
+        } else if !self.shared.users.auth.allow_anonymous_login {
+            return self
+                .disconnect_on_connect_error(
+                    ConnectReturnCode::NotAuthorized,
+                    "client tried to login anonymously, but anonymous logins are not enabled",
+                )
+                .await;
         }
 
         let mut resuming_session = false;
@@ -659,6 +673,32 @@ impl Connection {
             }),
         ))
         .await?;
+        self.stream.shutdown().await?;
+        Ok(())
+    }
+
+    /// Disconnect after a CONNECT error,
+    async fn disconnect_on_connect_error(
+        &mut self,
+        code: ConnectReturnCode,
+        reason: impl Display + Into<String>,
+    ) -> crate::Result<()> {
+        if self.shared.users.auth.silent_connect_errors {
+            tracing::debug!(?code, "silently disconnecting client: {reason}");
+        } else {
+            self.send(Packet::ConnAck(
+                ConnAck {
+                    session_present: false,
+                    code,
+                },
+                Some(ConnAckProperties {
+                    reason_string: Some(reason.into()),
+                    ..Default::default()
+                }),
+            ))
+            .await?;
+        }
+
         self.stream.shutdown().await?;
         Ok(())
     }
