@@ -1,3 +1,4 @@
+use color_eyre::eyre;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -77,6 +78,19 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
     // Merge any auth overrides from the command-line.
     users.auth.merge(&args.auth_config);
 
+    if users.by_username.is_empty() && !users.auth.allow_anonymous_login {
+        let command = std::env::args().next().expect("run without any args?");
+
+        eyre::bail!(
+            "Broker will be impossible to use in current configuration; \
+            no user logins are configured and anonymous login is disallowed by default. \
+            Run `{command} user add` to create at least one user login or enable anonymous login. \
+            Run `{command} help` for details.",
+        )
+    }
+
+    eyre::ensure!(!users.by_username.is_empty() || users.auth.allow_anonymous_login,);
+
     let tce_config =
         create_tce_config(&args, &addresses).wrap_err("error initializing TCE config")?;
 
@@ -90,7 +104,7 @@ async fn main_async(
     users: UsersConfig,
     tce_config: tashi_consensus_engine::Config,
 ) -> crate::Result<()> {
-    let (tce_platform, _tce_message_stream) = Platform::start(
+    let (tce_platform, tce_message_stream) = Platform::start(
         tce_config,
         QuicSocket::bind_udp(args.tce_listen_addr).await?,
         false,
@@ -98,7 +112,13 @@ async fn main_async(
 
     let tce_platform = Arc::new(tce_platform);
 
-    let mut broker = MqttBroker::bind(args.mqtt_listen_addr, users, tce_platform.clone()).await?;
+    let mut broker = MqttBroker::bind(
+        args.mqtt_listen_addr,
+        users,
+        tce_platform.clone(),
+        tce_message_stream,
+    )
+    .await?;
 
     loop {
         tokio::select! {

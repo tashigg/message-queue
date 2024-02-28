@@ -12,7 +12,7 @@ use tce_message::PublishTrasaction;
 use crate::mqtt::MAX_STRING_LEN;
 use crate::tce_message;
 use crate::tce_message::{
-    BytesAsOctetString, PublishMeta, PublishTransactionProperties, TimestampSeconds,
+    BytesAsOctetString, PublishMeta, PublishTransactionProperties, TimestampSeconds, UserProperties,
 };
 
 #[derive(Debug, PartialEq, Eq)]
@@ -236,14 +236,9 @@ pub fn validate_and_convert(
             content_type: props.content_type,
             response_topic: props.response_topic,
             correlation_data: props.correlation_data.map(BytesAsOctetString),
+            // `der` doesn't have an equivalent of `skip_serializing_if`
             user_properties: if !props.user_properties.is_empty() {
-                Some(
-                    props
-                        .user_properties
-                        .into_iter()
-                        .map(|(k, v)| [k, v])
-                        .collect(),
-                )
+                Some(UserProperties(props.user_properties))
             } else {
                 None
             },
