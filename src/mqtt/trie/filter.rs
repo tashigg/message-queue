@@ -1,11 +1,42 @@
 use std::str::FromStr;
 
+#[cfg(feature = "arbitrary")]
+use arbitrary::Arbitrary;
+
 use super::NameToken;
 
 #[derive(Clone, Debug)]
 pub struct Filter {
     pub(super) tokens: Vec<FilterToken>,
     pub(super) leaf_kind: LeafKind,
+}
+
+impl From<&'_ super::TopicName<'_>> for Filter {
+    fn from(value: &'_ super::TopicName<'_>) -> Self {
+        Self {
+            tokens: value
+                .0
+                .iter()
+                .map(|it| FilterToken::Literal(it.0.to_owned().into_boxed_str()))
+                .collect(),
+            leaf_kind: LeafKind::Exact,
+        }
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a> Arbitrary<'a> for Filter {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let tokens: Vec<_> = u.arbitrary()?;
+
+        let leaf_kind = if tokens.len() != 0 {
+            u.arbitrary()?
+        } else {
+            LeafKind::Any
+        };
+
+        Ok(Self { tokens, leaf_kind })
+    }
 }
 
 impl FromStr for Filter {
@@ -72,6 +103,23 @@ pub(super) enum FilterToken {
     WildPlus,
 }
 
+#[cfg(feature = "arbitrary")]
+impl<'a> Arbitrary<'a> for FilterToken {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let b: u8 = match u.arbitrary() {
+            Ok(it) => it,
+            Err(arbitrary::Error::NotEnoughData) => return Ok(FilterToken::WildPlus),
+            Err(e) => return Err(e),
+        };
+
+        match b & 1 {
+            0 => Ok(FilterToken::Literal(u.arbitrary()?)),
+            1 => Ok(FilterToken::WildPlus),
+            _ => unreachable!(),
+        }
+    }
+}
+
 impl FilterToken {
     pub(super) fn matches(&self, name: NameToken<'_>) -> bool {
         match self {
@@ -89,6 +137,24 @@ pub(super) enum LeafKind {
     Any,
 }
 
+// manual impl to use less bytes of input (default uses a u32)
+// less input = smaller, smaller = smaller corpus, faster.
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for LeafKind {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let b: u8 = u.arbitrary()?;
+
+        match b & 1 {
+            0 => Ok(LeafKind::Exact),
+            1 => Ok(LeafKind::Any),
+            _ => unreachable!(),
+        }
+    }
+
+    fn size_hint(_depth: usize) -> (usize, Option<usize>) {
+        (1, Some(1))
+    }
+}
 impl LeafKind {
     /// Returns `true` if the leaf kind is [`Any`].
     ///
