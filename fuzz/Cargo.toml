@@ -1,0 +1,43 @@
+[package]
+name = "tashi-message-queue-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "0.4.0", features = ["arbitrary-derive"] }
+arbitrary = { version = "1", features = ["derive"] }
+rumqttd-shim.workspace = true
+bytes = "1.5.0"
+
+[dependencies.tashi-message-queue]
+features = ["arbitrary"]
+path = ".."
+
+[dependencies.quinn-proto]
+version = "0.10"
+features = ["arbitrary"]
+
+[[bin]]
+name = "trie"
+path = "fuzz_targets/trie.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rumqtt_proto_v5"
+path = "fuzz_targets/rumqtt_proto_v5.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rumqtt_proto_v4"
+path = "fuzz_targets/rumqtt_proto_v4.rs"
+test = false
+doc = false
+bench = false

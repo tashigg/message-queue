@@ -1,7 +1,8 @@
+#[cfg(feature = "arbitrary")]
+use arbitrary::Arbitrary;
 use slotmap::SlotMap;
 use std::fmt::{Debug, Write};
 use std::hash::Hash;
-
 mod filter;
 mod node;
 mod visitor;
@@ -254,7 +255,22 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
     }
 }
 
+#[derive(Debug)]
 pub struct TopicName<'a>(Vec<NameToken<'a>>);
+
+#[cfg(feature = "arbitrary")]
+impl<'a> Arbitrary<'a> for TopicName<'a> {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let s: &'a str = u.arbitrary()?;
+
+        match Self::parse(s) {
+            Ok(it) => Ok(it),
+            Err(ParseError::UnexpectedCharacter { ch: _, idx }) => {
+                Ok(Self::parse(&s[..idx]).unwrap())
+            }
+        }
+    }
+}
 
 impl<'a> TopicName<'a> {
     pub fn parse(s: &'a str) -> Result<Self, ParseError> {
@@ -276,7 +292,7 @@ impl<'a> TryFrom<&'a str> for TopicName<'a> {
 }
 
 /// A UTF-8 string containing no `\0` characters nor any operators.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 struct NameToken<'a>(&'a str);
 
 #[derive(thiserror::Error, Debug)]
