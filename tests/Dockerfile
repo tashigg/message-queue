@@ -9,6 +9,8 @@ COPY src/lib.rs src/lib.rs
 COPY src/main.rs src/main.rs
 COPY rumqttd-shim/ rumqttd-shim/
 COPY .cargo/config.toml .cargo/config.toml
+COPY fuzz/Cargo.toml fuzz/Cargo.toml
+COPY fuzz/fuzz_targets/ fuzz/fuzz_targets
 
 RUN mkdir -p -m 0600 /root/.ssh
 RUN ssh-keyscan github.com > /root/.ssh/known_hosts
