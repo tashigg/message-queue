@@ -1,12 +1,8 @@
 use std::vec;
 
-use slotmap::SlotMap;
-
 use super::filter::{FilterToken, LeafKind};
-use super::node::{Node, NodeId};
+use super::node::NodeId;
 use super::{Data, NameToken};
-
-pub(super) type VisitContext<K, V> = SlotMap<NodeId, Node<K, V>>;
 
 /// A resumable visitor to walk down a filter path.
 ///
@@ -27,7 +23,7 @@ impl WalkFilter {
 
     pub(super) fn visit_node<K, V>(
         &mut self,
-        cx: &VisitContext<K, V>,
+        cx: &super::Nodes<K, V>,
         node_id: NodeId,
     ) -> Result<NodeId, NodePlace> {
         let mut node_id = node_id;
@@ -74,7 +70,7 @@ impl<'a, 'b: 'a, F: 'a> VisitMatches<'a, 'b, F> {
         }
     }
 
-    pub(super) fn visit_node<K, V>(&mut self, cx: &VisitContext<K, V>, node_id: NodeId)
+    pub(super) fn visit_node<K, V>(&mut self, cx: &super::Nodes<K, V>, node_id: NodeId)
     where
         F: FnMut(&K, &V),
     {

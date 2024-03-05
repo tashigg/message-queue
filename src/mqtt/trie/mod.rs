@@ -14,9 +14,11 @@ use node::{Data, Node, NodeId};
 use crate::mqtt::trie::filter::{FilterToken, LeafKind};
 use crate::mqtt::trie::visitor::WalkFilter;
 
+type Nodes<K, V> = SlotMap<NodeId, Node<K, V>>;
+
 pub struct FilterTrieMultiMap<K, V> {
     root: NodeId,
-    nodes: SlotMap<NodeId, Node<K, V>>,
+    nodes: Nodes<K, V>,
     len: usize,
 }
 
@@ -42,7 +44,7 @@ where
         }
         struct Iter<'a, K, V> {
             state: State,
-            nodes: &'a SlotMap<NodeId, Node<K, V>>,
+            nodes: &'a Nodes<K, V>,
         }
 
         // fixme: This iterator is very inefficient (O(n) scans per tree depth) but it probably doesn't matter because this is a Debug impl.
@@ -51,10 +53,7 @@ where
             type Item = NodeId;
 
             fn next(&mut self) -> Option<Self::Item> {
-                fn walk_down<K, V>(
-                    mut current: NodeId,
-                    nodes: &SlotMap<NodeId, Node<K, V>>,
-                ) -> NodeId {
+                fn walk_down<K, V>(mut current: NodeId, nodes: &Nodes<K, V>) -> NodeId {
                     while let Some(child) = nodes[current].filters.first() {
                         current = child.1;
                     }
@@ -99,7 +98,7 @@ where
             }
         }
 
-        fn walk_up<K, V>(node: NodeId, nodes: &SlotMap<NodeId, Node<K, V>>) -> Vec<FilterToken> {
+        fn walk_up<K, V>(node: NodeId, nodes: &Nodes<K, V>) -> Vec<FilterToken> {
             let mut current = node;
             let mut tokens = Vec::new();
             while !nodes[current].is_root() {
@@ -179,7 +178,7 @@ impl<K, V> FilterTrieMultiMap<K, V> {
 
 impl<K, V> Default for FilterTrieMultiMap<K, V> {
     fn default() -> Self {
-        let mut nodes = SlotMap::default();
+        let mut nodes = Nodes::default();
         let root = nodes.insert(Node::root());
 
         Self {

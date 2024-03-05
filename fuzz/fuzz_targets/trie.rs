@@ -40,7 +40,7 @@ fuzz_target!(|data: Data<'_>| {
             }
             Command::Remove { key, filter } => {
                 if let Some(filter) = data.filters.get(filter).cloned() {
-                    let _ = black_box(trie.remove(filter, &key));
+                    let _ = black_box(trie.remove_by_filter(filter, &key));
                 }
             }
             Command::Find { topic_name } => {
