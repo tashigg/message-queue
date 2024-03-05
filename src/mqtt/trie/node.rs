@@ -1,12 +1,17 @@
 use std::ops::{Index, IndexMut};
 
 use slotmap::Key;
-use tashi_collections::HashMap;
 
 use super::filter::{FilterToken, LeafKind};
 
+#[cfg(not(fuzzing))]
 /// A leaf of a trie, currently a `HashMap<K, V>`, but could end up as a `T``
-pub(super) type Data<K, V> = HashMap<K, V>;
+pub(super) type Data<K, V> = tashi_collections::HashMap<K, V>;
+
+// for fuzzing we need to be deterministic, and the HashDOS resistant hashmap is non-deterministic by design.
+#[cfg(fuzzing)]
+/// A leaf of a trie, currently a `HashMap<K, V>`, but could end up as a `T``
+pub(super) type Data<K, V> = tashi_collections::FnvHashMap<K, V>;
 
 slotmap::new_key_type! { pub(super) struct NodeId; }
 
