@@ -14,12 +14,11 @@ use node::{Data, Node, NodeId};
 use crate::mqtt::trie::filter::{FilterToken, LeafKind};
 use crate::mqtt::trie::visitor::WalkFilter;
 
-type Nodes<K, V> = SlotMap<NodeId, Node<K, V>>;
+type Nodes<T> = SlotMap<NodeId, Node<T>>;
 
-pub struct FilterTrieMultiMap<K, V> {
+pub struct FilterTrie<T> {
     root: NodeId,
-    nodes: Nodes<K, V>,
-    len: usize,
+    nodes: Nodes<T>,
 }
 
 /// An opaque index into a [`FilterTrieMultiMap`] for quickly finding an entry
@@ -30,9 +29,9 @@ pub struct EntryId {
     leaf_kind: LeafKind,
 }
 
-impl<K, V> Debug for FilterTrieMultiMap<K, V>
+impl<T> Debug for FilterTrie<T>
 where
-    Data<K, V>: Debug,
+    T: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut debug_map = f.debug_map();
@@ -42,18 +41,18 @@ where
             Initial { root: NodeId },
             Running { last: NodeId },
         }
-        struct Iter<'a, K, V> {
+        struct Iter<'a, T> {
             state: State,
-            nodes: &'a Nodes<K, V>,
+            nodes: &'a Nodes<T>,
         }
 
         // fixme: This iterator is very inefficient (O(n) scans per tree depth) but it probably doesn't matter because this is a Debug impl.
         // it's O(1) memory usage though.
-        impl<'a, K, V> Iterator for Iter<'a, K, V> {
+        impl<'a, T> Iterator for Iter<'a, T> {
             type Item = NodeId;
 
             fn next(&mut self) -> Option<Self::Item> {
-                fn walk_down<K, V>(mut current: NodeId, nodes: &Nodes<K, V>) -> NodeId {
+                fn walk_down<T>(mut current: NodeId, nodes: &Nodes<T>) -> NodeId {
                     while let Some(child) = nodes[current].filters.first() {
                         current = child.1;
                     }
@@ -98,7 +97,7 @@ where
             }
         }
 
-        fn walk_up<K, V>(node: NodeId, nodes: &Nodes<K, V>) -> Vec<FilterToken> {
+        fn walk_up<T>(node: NodeId, nodes: &Nodes<T>) -> Vec<FilterToken> {
             let mut current = node;
             let mut tokens = Vec::new();
             while !nodes[current].is_root() {
@@ -169,23 +168,50 @@ where
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-impl<K, V> FilterTrieMultiMap<K, V> {
+impl<T> FilterTrie<T> {
     pub fn new() -> Self {
         Self::default()
     }
 }
 
-impl<K, V> Default for FilterTrieMultiMap<K, V> {
+impl<T> Default for FilterTrie<T> {
     fn default() -> Self {
         let mut nodes = Nodes::default();
         let root = nodes.insert(Node::root());
 
+        Self { nodes, root }
+    }
+}
+
+// "specialization" of a `FilterTrie` with some added niceties.
+// this is a different struct rather than a `type` because of coherence (blanket impl for T overlaps exact impl for `node::Data<K, V>`).
+pub struct FilterTrieMultiMap<K, V> {
+    map: FilterTrie<node::Data<K, V>>,
+    len: usize,
+}
+
+impl<K, V> Default for FilterTrieMultiMap<K, V> {
+    fn default() -> Self {
         Self {
-            nodes,
-            root,
+            map: Default::default(),
             len: 0,
         }
+    }
+}
+
+impl<K, V> Debug for FilterTrieMultiMap<K, V>
+where
+    node::Data<K, V>: Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.map.fmt(f)
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl<K, V> FilterTrieMultiMap<K, V> {
+    pub fn new() -> Self {
+        Self::default()
     }
 }
 
@@ -207,14 +233,14 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
         let leaf_kind = filter.leaf_kind;
         let mut visitor = WalkFilter::new(filter);
 
-        let mut current = self.root;
+        let mut current = self.map.root;
         let end = loop {
-            match visitor.visit_node(&self.nodes, current) {
+            match visitor.visit_node(&self.map.nodes, current) {
                 Ok(res) => break res,
                 // expand any missing nodes (we need to insert a leaf at the end after all).
                 Err(place) => {
-                    let new_id = self.nodes.insert(Node::new(place.parent_id));
-                    self.nodes[place.parent_id]
+                    let new_id = self.map.nodes.insert(Node::new(place.parent_id));
+                    self.map.nodes[place.parent_id]
                         .filters
                         .insert(place.idx, (place.token, new_id));
                     current = new_id;
@@ -222,7 +248,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
             }
         };
 
-        let replaced = self.nodes[end][leaf_kind]
+        let replaced = self.map.nodes[end][leaf_kind]
             .get_or_insert_with(Default::default)
             .insert(key, value);
 
@@ -239,7 +265,10 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
 
     pub fn visit_matches(&self, topic_name: &TopicName<'_>, mut f: impl FnMut(&K, &V)) {
         debug_assert!(!topic_name.0.is_empty(), "invalid empty topic name");
-        visitor::VisitMatches::new(&topic_name.0, &mut f).visit_node(&self.nodes, self.root)
+        visitor::VisitMatches::new(&topic_name.0, &mut |map: &Data<K, V>| {
+            map.iter().for_each(|(k, v)| f(k, v))
+        })
+        .visit_node(&self.map.nodes, self.map.root)
     }
 
     /// Find and remove a key that was previously added for `filter`.
@@ -248,7 +277,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
         let mut visitor = WalkFilter::new(filter);
 
         // if we don't have the node for the filter, we certainly won't have the key/value.
-        let node_id = visitor.visit_node(&self.nodes, self.root).ok()?;
+        let node_id = visitor.visit_node(&self.map.nodes, self.map.root).ok()?;
 
         self.remove_by_id(EntryId { node_id, leaf_kind }, key)
     }
@@ -257,7 +286,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
     pub fn remove_by_id(&mut self, place_id: EntryId, key: &K) -> Option<V> {
         let EntryId { node_id, leaf_kind } = place_id;
 
-        let end = &mut self.nodes[node_id];
+        let end = &mut self.map.nodes[node_id];
 
         let leaf = &mut end[leaf_kind];
 
@@ -269,7 +298,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
         // iteratively remove nodes from the trie until we find either the root or a non empty node.
         let mut current = node_id;
         loop {
-            let node = &mut self.nodes[current];
+            let node = &mut self.map.nodes[current];
 
             if !node.is_empty() {
                 break;
@@ -284,13 +313,13 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
             let new = node.parent;
 
             // the expect here failing implies that the node has a different parent than what it thinks,
-            let idx = self.nodes[new]
+            let idx = self.map.nodes[new]
                 .filters
                 .iter()
                 .position(|it| it.1 == current)
                 .expect("orphaned node reached through parent");
 
-            self.nodes[new].filters.remove(idx);
+            self.map.nodes[new].filters.remove(idx);
 
             current = new
         }

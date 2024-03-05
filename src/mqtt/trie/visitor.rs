@@ -2,7 +2,7 @@ use std::vec;
 
 use super::filter::{FilterToken, LeafKind};
 use super::node::NodeId;
-use super::{Data, NameToken};
+use super::NameToken;
 
 /// A resumable visitor to walk down a filter path.
 ///
@@ -21,9 +21,9 @@ impl WalkFilter {
         Self(filter.tokens.into_iter())
     }
 
-    pub(super) fn visit_node<K, V>(
+    pub(super) fn visit_node<T>(
         &mut self,
-        cx: &super::Nodes<K, V>,
+        cx: &super::Nodes<T>,
         node_id: NodeId,
     ) -> Result<NodeId, NodePlace> {
         let mut node_id = node_id;
@@ -70,15 +70,15 @@ impl<'a, 'b: 'a, F: 'a> VisitMatches<'a, 'b, F> {
         }
     }
 
-    pub(super) fn visit_node<K, V>(&mut self, cx: &super::Nodes<K, V>, node_id: NodeId)
+    pub(super) fn visit_node<T>(&mut self, cx: &super::Nodes<T>, node_id: NodeId)
     where
-        F: FnMut(&K, &V),
+        F: FnMut(&T),
     {
         let node = &cx[node_id];
 
         let Some((&next, rest)) = self.topic_name.split_first() else {
             if let Some(leaf) = &node[LeafKind::Exact] {
-                self.visit_data(leaf)
+                (self.callback)(leaf)
             }
 
             return;
@@ -87,22 +87,13 @@ impl<'a, 'b: 'a, F: 'a> VisitMatches<'a, 'b, F> {
         // important note: `descendant_leaf` is tacked onto this node because there's no node that makes sense to do so otherwise.
         // However, it doesn't match when an exact match would. `foo/#` (Filter) doesn't match `foo` (Topic name), but `foo` (Filter) would.
         if let Some(leaf) = &node[LeafKind::Any] {
-            self.visit_data(leaf)
+            (self.callback)(leaf)
         }
 
         let mut visitor = VisitMatches::new(rest, &mut *self.callback);
 
         for (_, node_id) in node.filters.iter().filter(|it| it.0.matches(next)) {
             visitor.visit_node(cx, *node_id);
-        }
-    }
-
-    fn visit_data<K, V>(&mut self, leaf: &Data<K, V>)
-    where
-        F: FnMut(&K, &V),
-    {
-        for (k, v) in leaf.iter() {
-            (self.callback)(k, v)
         }
     }
 }
