@@ -26,8 +26,14 @@ pub(super) struct NodeLeaf<T> {
     pub(super) descendant_val: Option<T>,
 }
 
-impl<K, V> NodeLeaf<Data<K, V>> {
+impl<T> NodeLeaf<T> {
     fn is_empty(&self) -> bool {
+        self.exact_val.is_none() && self.descendant_val.is_none()
+    }
+}
+
+impl<K, V> NodeLeaf<Data<K, V>> {
+    fn is_multimap_empty(&self) -> bool {
         // this could be a matches!, but, no, it'd be a very hard to understand `matches!`.
         #[allow(clippy::match_like_matches_macro)]
         match (&self.exact_val, &self.descendant_val) {
@@ -73,14 +79,18 @@ impl<T> Node<T> {
         Self::new(NodeId::null())
     }
 
+    pub(super) fn is_empty(&self) -> bool {
+        self.filters.is_empty() && self.leaf_data.is_empty()
+    }
+
     pub(super) fn is_root(&self) -> bool {
         self.parent.is_null()
     }
 }
 
 impl<K, V> Node<Data<K, V>> {
-    pub(super) fn is_empty(&self) -> bool {
-        self.filters.is_empty() && self.leaf_data.is_empty()
+    pub(super) fn is_multimap_empty(&self) -> bool {
+        self.filters.is_empty() && self.leaf_data.is_multimap_empty()
     }
 }
 

@@ -3,6 +3,7 @@ use arbitrary::Arbitrary;
 use slotmap::SlotMap;
 use std::fmt::{Debug, Display, Formatter, Write};
 use std::hash::Hash;
+
 mod filter;
 mod node;
 mod visitor;
@@ -11,8 +12,8 @@ pub use filter::Filter;
 
 use node::{Data, Node, NodeId};
 
-use crate::mqtt::trie::filter::{FilterToken, LeafKind};
-use crate::mqtt::trie::visitor::WalkFilter;
+use filter::{FilterToken, LeafKind};
+use visitor::NodePlace;
 
 type Nodes<T> = SlotMap<NodeId, Node<T>>;
 
@@ -172,6 +173,54 @@ impl<T> FilterTrie<T> {
     pub fn new() -> Self {
         Self::default()
     }
+
+    pub fn contains_entry(&self, entry_id: EntryId) -> bool {
+        self.nodes
+            .get(entry_id.node_id)
+            .map_or(false, |it| it[entry_id.leaf_kind].is_some())
+    }
+
+    pub fn entry(&mut self, filter: Filter) -> Entry<'_, T> {
+        match visitor::walk_filter(&filter.tokens, &self.nodes, self.root) {
+            Ok(end) => {
+                let entry_id = EntryId {
+                    node_id: end,
+                    leaf_kind: filter.leaf_kind,
+                };
+
+                match self.contains_entry(entry_id) {
+                    true => Entry::Occupied(OccupiedEntry {
+                        filter,
+                        base: IdEntry {
+                            entry_id,
+                            nodes: &mut self.nodes,
+                        },
+                    }),
+                    false => Entry::Vacant(VacantEntry {
+                        filter,
+                        place: PlaceOrLeaf::Leaf(end),
+                        nodes: &mut self.nodes,
+                    }),
+                }
+            }
+            Err(place) => Entry::Vacant(VacantEntry {
+                filter,
+                place: PlaceOrLeaf::Place(place),
+                nodes: &mut self.nodes,
+            }),
+        }
+    }
+
+    pub fn entry_by_id(&mut self, entry_id: EntryId) -> Option<IdEntry<'_, T>> {
+        if self.contains_entry(entry_id) {
+            return Some(IdEntry {
+                entry_id,
+                nodes: &mut self.nodes,
+            });
+        }
+
+        None
+    }
 }
 
 impl<T> Default for FilterTrie<T> {
@@ -180,6 +229,266 @@ impl<T> Default for FilterTrie<T> {
         let root = nodes.insert(Node::root());
 
         Self { nodes, root }
+    }
+}
+
+pub struct IdEntry<'a, T: 'a> {
+    entry_id: EntryId,
+    nodes: &'a mut Nodes<T>,
+}
+
+impl<'a, T: 'a> IdEntry<'a, T> {
+    pub fn entry_id(&self) -> EntryId {
+        self.entry_id
+    }
+
+    pub fn get(&self) -> &T {
+        // fixme: should be a `get_unchecked`.
+        let node = &self.nodes[self.entry_id.node_id];
+
+        // should be an `unwrap_unchecked`
+        node[self.entry_id.leaf_kind].as_ref().unwrap()
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        // fixme: should be a `get_unchecked`.
+        let node = &mut self.nodes[self.entry_id.node_id];
+
+        // should be an `unwrap_unchecked`
+        node[self.entry_id.leaf_kind].as_mut().unwrap()
+    }
+
+    pub fn into_mut(self) -> &'a mut T {
+        let node = &mut self.nodes[self.entry_id.node_id];
+
+        match &mut node[self.entry_id.leaf_kind] {
+            Some(it) => it,
+            // should be unchecked
+            None => unreachable!(),
+        }
+    }
+
+    pub fn into_mut_with_id(self) -> (&'a mut T, EntryId) {
+        let id = self.entry_id();
+
+        (self.into_mut(), id)
+    }
+
+    pub fn insert(&mut self, value: T) -> T {
+        // fixme: should be a `get_unchecked`.
+        let node = &mut self.nodes[self.entry_id.node_id];
+
+        // should be an `unwrap_unchecked`
+        node[self.entry_id.leaf_kind].replace(value).unwrap()
+    }
+
+    pub fn remove(self) -> T {
+        remove_entry(self.entry_id(), self.nodes, |node| node.is_empty())
+    }
+}
+
+pub enum Entry<'a, T: 'a> {
+    Occupied(OccupiedEntry<'a, T>),
+    Vacant(VacantEntry<'a, T>),
+}
+
+impl<'a, T: 'a> Entry<'a, T> {
+    pub fn or_insert(self, default: T) -> (&'a mut T, EntryId) {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut_with_id(),
+            Entry::Vacant(entry) => entry.insert(default),
+        }
+    }
+
+    pub fn or_insert_with<F: FnOnce() -> T>(self, default: F) -> (&'a mut T, EntryId) {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut_with_id(),
+            Entry::Vacant(entry) => entry.insert(default()),
+        }
+    }
+
+    pub fn filter(&self) -> &Filter {
+        match self {
+            Entry::Occupied(entry) => entry.filter(),
+            Entry::Vacant(entry) => entry.filter(),
+        }
+    }
+
+    pub fn and_modify<F: FnOnce(&mut T)>(self, f: F) -> Self {
+        match self {
+            Entry::Occupied(mut it) => {
+                f(it.get_mut());
+                Entry::Occupied(it)
+            }
+            Entry::Vacant(it) => Entry::Vacant(it),
+        }
+    }
+
+    pub fn or_default(self) -> (&'a mut T, EntryId)
+    where
+        T: Default,
+    {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut_with_id(),
+            Entry::Vacant(entry) => entry.insert(Default::default()),
+        }
+    }
+}
+
+pub struct OccupiedEntry<'a, T: 'a> {
+    // kinda sucks that we have to keep this around just for things to be able to get it back out.
+    filter: Filter,
+    base: IdEntry<'a, T>,
+}
+
+impl<'a, T> OccupiedEntry<'a, T> {
+    pub fn filter(&self) -> &Filter {
+        &self.filter
+    }
+
+    pub fn into_filter(self) -> Filter {
+        self.filter
+    }
+
+    pub fn entry_id(&self) -> EntryId {
+        self.base.entry_id()
+    }
+
+    pub fn get(&self) -> &T {
+        self.base.get()
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        self.base.get_mut()
+    }
+
+    pub fn into_mut(self) -> &'a mut T {
+        self.base.into_mut()
+    }
+
+    pub fn into_mut_with_id(self) -> (&'a mut T, EntryId) {
+        self.base.into_mut_with_id()
+    }
+
+    pub fn insert(&mut self, value: T) -> T {
+        self.base.insert(value)
+    }
+
+    fn remove_kv(self, empty_node: impl FnMut(&Node<T>) -> bool) -> (Filter, T) {
+        let value = remove_entry(self.entry_id(), self.base.nodes, empty_node);
+        (self.filter, value)
+    }
+
+    pub fn remove_entry(self) -> (Filter, T) {
+        self.remove_kv(|node| node.is_empty())
+    }
+
+    pub fn remove(self) -> T {
+        self.remove_entry().1
+    }
+}
+
+/// Invariant: `nodes.contains(place_id)` must return `true`,
+/// this is not currently a safety invariant.
+/// When it becomes one this function will become `unsafe` as would be required.
+fn remove_entry<T>(
+    place_id: EntryId,
+    nodes: &mut Nodes<T>,
+    mut empty_node: impl FnMut(&Node<T>) -> bool,
+) -> T {
+    let EntryId { node_id, leaf_kind } = place_id;
+    // fixme: should be a `get_unchecked`.
+    let node = &mut nodes[node_id];
+
+    // should be an `unwrap_unchecked`
+    let value = node[leaf_kind].take().unwrap();
+
+    // this loop nees to be weirdly split over iterations,
+    // iteratively remove nodes from the trie until we find either the root or a non empty node.
+    let mut current = node_id;
+    loop {
+        let node = &mut nodes[current];
+
+        if !empty_node(node) {
+            break;
+        }
+
+        // don't remove the root node, we'll have to put it back and it's not like it gives us anything useful to get rid of.
+        if node.is_root() {
+            break;
+        }
+
+        let new = node.parent;
+
+        // the expect here failing implies that the node has a different parent than what it thinks,
+        let idx = nodes[new]
+            .filters
+            .iter()
+            .position(|it| it.1 == current)
+            .expect("orphaned node reached through parent");
+
+        nodes[new].filters.remove(idx);
+
+        current = new
+    }
+
+    value
+}
+
+// used in a vacant entry to insert nodes.
+enum PlaceOrLeaf {
+    // there's a missing node.
+    Place(NodePlace),
+    Leaf(NodeId),
+}
+
+pub struct VacantEntry<'a, T> {
+    filter: Filter,
+    place: PlaceOrLeaf,
+    nodes: &'a mut Nodes<T>,
+}
+
+impl<'a, T> VacantEntry<'a, T> {
+    pub fn filter(&self) -> &Filter {
+        &self.filter
+    }
+
+    pub fn into_filter(self) -> Filter {
+        self.filter
+    }
+
+    pub fn insert(self, value: T) -> (&'a mut T, EntryId) {
+        let node_id = match self.place {
+            PlaceOrLeaf::Place(place) => {
+                let mut insertions = self.filter.tokens.into_iter().skip(place.token);
+
+                let first = insertions.next().unwrap();
+                let new_id = self.nodes.insert(Node::new(place.parent_id));
+                self.nodes[place.parent_id]
+                    .filters
+                    .insert(place.idx, (first, new_id));
+                let mut current = new_id;
+
+                // since we just made a node we know it's empty and don't have to figure out where to push the new nodes.
+                for insertion in insertions {
+                    let new_id = self.nodes.insert(Node::new(current));
+                    self.nodes[current].filters.push((insertion, new_id));
+                    current = new_id;
+                }
+
+                current
+            }
+            PlaceOrLeaf::Leaf(node) => node,
+        };
+
+        let place_id = EntryId {
+            node_id,
+            leaf_kind: self.filter.leaf_kind,
+        };
+
+        let value = self.nodes[node_id][self.filter.leaf_kind].insert(value);
+
+        (value, place_id)
     }
 }
 
@@ -222,7 +531,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.len() == 0
     }
 
     /// Insert a new filter+key into the map
@@ -230,37 +539,12 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
     /// Returns the old value for this filter, if present,
     /// as well as an opaque ID for efficiently finding the entry again without traversing the trie.
     pub fn insert(&mut self, filter: Filter, key: K, value: V) -> (EntryId, Option<V>) {
-        let leaf_kind = filter.leaf_kind;
-        let mut visitor = WalkFilter::new(filter);
+        let (map, place) = self.map.entry(filter).or_default();
 
-        let mut current = self.map.root;
-        let end = loop {
-            match visitor.visit_node(&self.map.nodes, current) {
-                Ok(res) => break res,
-                // expand any missing nodes (we need to insert a leaf at the end after all).
-                Err(place) => {
-                    let new_id = self.map.nodes.insert(Node::new(place.parent_id));
-                    self.map.nodes[place.parent_id]
-                        .filters
-                        .insert(place.idx, (place.token, new_id));
-                    current = new_id;
-                }
-            }
-        };
+        let replaced = map.insert(key, value);
+        self.len += replaced.is_none() as usize;
 
-        let replaced = self.map.nodes[end][leaf_kind]
-            .get_or_insert_with(Default::default)
-            .insert(key, value);
-
-        self.len += 1;
-
-        (
-            EntryId {
-                node_id: end,
-                leaf_kind,
-            },
-            replaced,
-        )
+        (place, replaced)
     }
 
     pub fn visit_matches(&self, topic_name: &TopicName<'_>, mut f: impl FnMut(&K, &V)) {
@@ -272,14 +556,16 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
     }
 
     /// Find and remove a key that was previously added for `filter`.
-    pub fn remove_by_filter(&mut self, filter: Filter, key: &K) -> Option<V> {
-        let leaf_kind = filter.leaf_kind;
-        let mut visitor = WalkFilter::new(filter);
+    pub fn remove_by_filter(&mut self, filter: &Filter, key: &K) -> Option<V> {
+        let end = visitor::walk_filter(&filter.tokens, &self.map.nodes, self.map.root).ok()?;
 
-        // if we don't have the node for the filter, we certainly won't have the key/value.
-        let node_id = visitor.visit_node(&self.map.nodes, self.map.root).ok()?;
-
-        self.remove_by_id(EntryId { node_id, leaf_kind }, key)
+        self.remove_by_id(
+            EntryId {
+                node_id: end,
+                leaf_kind: filter.leaf_kind,
+            },
+            key,
+        )
     }
 
     /// Remove a key using a previously returned `TriePlaceId`.
@@ -290,41 +576,17 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
 
         let leaf = &mut end[leaf_kind];
 
-        let ret = leaf.as_mut()?.remove(key);
+        let v = leaf.as_mut()?.remove(key);
 
-        self.len -= 1;
+        self.len -= v.is_some() as usize;
 
-        // this loop needs to be weirdly split over iterations,
-        // iteratively remove nodes from the trie until we find either the root or a non empty node.
-        let mut current = node_id;
-        loop {
-            let node = &mut self.map.nodes[current];
-
-            if !node.is_empty() {
-                break;
-            }
-
-            // don't remove the root node, we'll have to put it back
-            // and it's not like it gives us anything useful to get rid of.
-            if node.is_root() {
-                break;
-            }
-
-            let new = node.parent;
-
-            // the expect here failing implies that the node has a different parent than what it thinks,
-            let idx = self.map.nodes[new]
-                .filters
-                .iter()
-                .position(|it| it.1 == current)
-                .expect("orphaned node reached through parent");
-
-            self.map.nodes[new].filters.remove(idx);
-
-            current = new
+        if end.is_multimap_empty() {
+            remove_entry(place_id, &mut self.map.nodes, |node| {
+                node.is_multimap_empty()
+            });
         }
 
-        ret
+        v
     }
 }
 
@@ -422,7 +684,7 @@ mod tests {
     use super::filter::Filter;
     use super::{FilterTrieMultiMap, TopicName};
 
-    #[derive(Eq, PartialEq)]
+    #[derive(Eq, PartialEq, Debug)]
     struct NoClone<T>(T);
 
     #[test]
@@ -431,10 +693,7 @@ mod tests {
         let mut trie = FilterTrieMultiMap::new();
         trie.insert(filter.clone(), 0, NoClone(0));
 
-        assert_eq!(
-            trie.remove_by_filter(filter.clone(), &0).map(|it| it.0),
-            Some(0)
-        );
+        assert_eq!(trie.remove_by_filter(&filter, &0).map(|it| it.0), Some(0));
 
         let values = [
             ("foo", 0),
@@ -451,8 +710,10 @@ mod tests {
         }
 
         for (idx, &(filter, key)) in values.iter().enumerate() {
+            dbg!(idx, &trie);
+
             assert_eq!(
-                trie.remove_by_filter(filter.parse().unwrap(), &key)
+                trie.remove_by_filter(&filter.parse().unwrap(), &key)
                     .map(|it| it.0),
                 Some(idx as i32 + 1)
             );
@@ -464,10 +725,7 @@ mod tests {
         let mut trie = FilterTrieMultiMap::new();
         trie.insert(filter.clone(), 0, NoClone(0));
 
-        assert_eq!(
-            trie.remove_by_filter(filter.clone(), &0).map(|it| it.0),
-            Some(0)
-        );
+        assert_eq!(trie.remove_by_filter(&filter, &0).map(|it| it.0), Some(0));
 
         let values = [
             ("foo", 0),

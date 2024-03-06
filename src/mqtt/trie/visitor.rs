@@ -1,58 +1,37 @@
-use std::vec;
-
 use super::filter::{FilterToken, LeafKind};
 use super::node::NodeId;
 use super::NameToken;
 
-/// A resumable visitor to walk down a filter path.
-///
-/// Note: Resumable in this context means that if the visitor returns an error,
-/// inserting a node at given [`NodePlace`] then calling [`visit_node`] again with the newly inserted node continues the walk where it left off.
-///
-/// [`visit_node`]: WalkFilter::visit_node
-pub(super) struct WalkFilter(vec::IntoIter<FilterToken>);
-
-impl WalkFilter {
-    pub(super) fn new(filter: super::Filter) -> Self {
-        assert!(
-            filter.leaf_kind.is_any() || !filter.tokens.is_empty(),
-            "BUG: empty filter"
-        );
-        Self(filter.tokens.into_iter())
-    }
-
-    pub(super) fn visit_node<T>(
-        &mut self,
-        cx: &super::Nodes<T>,
-        node_id: NodeId,
-    ) -> Result<NodeId, NodePlace> {
-        let mut node_id = node_id;
-
-        for token in self.0.by_ref() {
-            let node = &cx[node_id];
-
-            let idx = node
-                .filters
-                .binary_search_by_key(&&token, |it| &it.0)
-                .map_err(|idx| NodePlace {
-                    parent_id: node_id,
-                    token,
-                    idx,
-                })?;
-
-            node_id = node.filters[idx].1;
-        }
-
-        // we ran out of filters this is the node.
-        Ok(node_id)
-    }
-}
-
 /// An identification on where to insert a node if it's missing.
 pub(super) struct NodePlace {
     pub(super) parent_id: NodeId,
-    pub(super) token: FilterToken,
+    pub(super) token: usize,
     pub(super) idx: usize,
+}
+
+pub(super) fn walk_filter<T>(
+    filter: &[FilterToken],
+    cx: &super::Nodes<T>,
+    root: NodeId,
+) -> Result<NodeId, NodePlace> {
+    let mut node_id = root;
+    for (token_idx, token) in filter.iter().enumerate() {
+        let node = &cx[node_id];
+
+        let idx = node
+            .filters
+            .binary_search_by_key(&token, |it| &it.0)
+            .map_err(|idx| NodePlace {
+                parent_id: node_id,
+                token: token_idx,
+                idx,
+            })?;
+
+        node_id = node.filters[idx].1;
+    }
+
+    // we ran out of filters this is the node.
+    Ok(node_id)
 }
 
 /// Visits all filters that match the topic in an unspecified order.
