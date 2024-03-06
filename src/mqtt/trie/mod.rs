@@ -180,6 +180,35 @@ impl<T> FilterTrie<T> {
             .map_or(false, |it| it[entry_id.leaf_kind].is_some())
     }
 
+    fn lookup(&self, filter: &Filter) -> Option<EntryId> {
+        let node_id = visitor::walk_filter(&filter.tokens, &self.nodes, self.root).ok()?;
+
+        Some(EntryId {
+            node_id,
+            leaf_kind: filter.leaf_kind,
+        })
+    }
+
+    pub fn insert(&mut self, filter: Filter, value: T) -> Option<T> {
+        match self.entry(filter) {
+            Entry::Occupied(mut entry) => Some(entry.insert(value)),
+            Entry::Vacant(entry) => {
+                entry.insert(value);
+                None
+            }
+        }
+    }
+
+    pub fn get(&self, filter: &Filter) -> Option<&T> {
+        let entry = self.lookup(filter)?;
+        self.nodes[entry.node_id][entry.leaf_kind].as_ref()
+    }
+
+    pub fn get_mut(&mut self, filter: &Filter) -> Option<&mut T> {
+        let entry = self.lookup(filter)?;
+        self.nodes[entry.node_id][entry.leaf_kind].as_mut()
+    }
+
     pub fn entry(&mut self, filter: Filter) -> Entry<'_, T> {
         match visitor::walk_filter(&filter.tokens, &self.nodes, self.root) {
             Ok(end) => {
@@ -557,20 +586,14 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
 
     /// Find and remove a key that was previously added for `filter`.
     pub fn remove_by_filter(&mut self, filter: &Filter, key: &K) -> Option<V> {
-        let end = visitor::walk_filter(&filter.tokens, &self.map.nodes, self.map.root).ok()?;
+        let entry_id = self.map.lookup(filter)?;
 
-        self.remove_by_id(
-            EntryId {
-                node_id: end,
-                leaf_kind: filter.leaf_kind,
-            },
-            key,
-        )
+        self.remove_by_id(entry_id, key)
     }
 
-    /// Remove a key using a previously returned `TriePlaceId`.
-    pub fn remove_by_id(&mut self, place_id: EntryId, key: &K) -> Option<V> {
-        let EntryId { node_id, leaf_kind } = place_id;
+    /// Remove a key using a previously returned `EntryId`.
+    pub fn remove_by_id(&mut self, entry_id: EntryId, key: &K) -> Option<V> {
+        let EntryId { node_id, leaf_kind } = entry_id;
 
         let end = &mut self.map.nodes[node_id];
 
@@ -581,7 +604,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
         self.len -= v.is_some() as usize;
 
         if end.is_multimap_empty() {
-            remove_entry(place_id, &mut self.map.nodes, |node| {
+            remove_entry(entry_id, &mut self.map.nodes, |node| {
                 node.is_multimap_empty()
             });
         }
