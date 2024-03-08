@@ -34,45 +34,29 @@ pub(super) fn walk_filter<T>(
     Ok(node_id)
 }
 
-/// Visits all filters that match the topic in an unspecified order.
-/// All matching topics will be visited exactly once.
-pub(super) struct VisitMatches<'a, 'b: 'a, F> {
-    topic_name: &'a [NameToken<'b>],
-    callback: &'a mut F,
-}
+pub(super) fn visit_matches<T, F: FnMut(&T)>(
+    topic_name: &[NameToken<'_>],
+    cx: &super::Nodes<T>,
+    node_id: NodeId,
+    callback: &mut F,
+) {
+    let node = &cx[node_id];
 
-impl<'a, 'b: 'a, F: 'a> VisitMatches<'a, 'b, F> {
-    pub(super) fn new(topic_name: &'a [NameToken<'b>], callback: &'a mut F) -> Self {
-        Self {
-            topic_name,
-            callback,
+    let Some((&next, rest)) = topic_name.split_first() else {
+        if let Some(leaf) = &node[LeafKind::Exact] {
+            callback(leaf)
         }
+
+        return;
+    };
+
+    // important note: `descendant_leaf` is tacked onto this node because there's no node that makes sense to do so otherwise.
+    // However, it doesn't match when an exact match would. `foo/#` (Filter) doesn't match `foo` (Topic name), but `foo` (Filter) would.
+    if let Some(leaf) = &node[LeafKind::Any] {
+        callback(leaf)
     }
 
-    pub(super) fn visit_node<T>(&mut self, cx: &super::Nodes<T>, node_id: NodeId)
-    where
-        F: FnMut(&T),
-    {
-        let node = &cx[node_id];
-
-        let Some((&next, rest)) = self.topic_name.split_first() else {
-            if let Some(leaf) = &node[LeafKind::Exact] {
-                (self.callback)(leaf)
-            }
-
-            return;
-        };
-
-        // important note: `descendant_leaf` is tacked onto this node because there's no node that makes sense to do so otherwise.
-        // However, it doesn't match when an exact match would. `foo/#` (Filter) doesn't match `foo` (Topic name), but `foo` (Filter) would.
-        if let Some(leaf) = &node[LeafKind::Any] {
-            (self.callback)(leaf)
-        }
-
-        let mut visitor = VisitMatches::new(rest, &mut *self.callback);
-
-        for (_, node_id) in node.filters.iter().filter(|it| it.0.matches(next)) {
-            visitor.visit_node(cx, *node_id);
-        }
+    for (_, node_id) in node.filters.iter().filter(|it| it.0.matches(next)) {
+        visit_matches(rest, cx, *node_id, &mut *callback);
     }
 }

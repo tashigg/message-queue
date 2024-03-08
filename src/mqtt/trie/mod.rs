@@ -257,7 +257,7 @@ impl<T> FilterTrie<T> {
 
     pub fn visit_matches(&self, topic_name: &TopicName<'_>, mut f: impl FnMut(&T)) {
         debug_assert!(!topic_name.0.is_empty(), "invalid empty topic name");
-        visitor::VisitMatches::new(&topic_name.0, &mut f).visit_node(&self.nodes, self.root)
+        visitor::visit_matches(&topic_name.0, &self.nodes, self.root, &mut f)
     }
 
     pub fn remove_by_filter(&mut self, filter: &Filter) -> Option<T> {
