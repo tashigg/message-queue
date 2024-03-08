@@ -22,8 +22,8 @@ version = "0.10"
 features = ["arbitrary"]
 
 [[bin]]
-name = "trie"
-path = "fuzz_targets/trie.rs"
+name = "trie_multi_map"
+path = "fuzz_targets/trie_multi_map.rs"
 test = false
 doc = false
 bench = false
