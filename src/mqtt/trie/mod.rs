@@ -250,6 +250,17 @@ impl<T> FilterTrie<T> {
 
         None
     }
+
+    pub fn visit_matches(&self, topic_name: &TopicName<'_>, mut f: impl FnMut(&T)) {
+        debug_assert!(!topic_name.0.is_empty(), "invalid empty topic name");
+        visitor::VisitMatches::new(&topic_name.0, &mut f).visit_node(&self.nodes, self.root)
+    }
+
+    pub fn remove_by_filter(&mut self, filter: &Filter) -> Option<T> {
+        let entry_id = self.lookup(filter)?;
+
+        self.entry_by_id(entry_id).map(IdEntry::remove)
+    }
 }
 
 impl<T> Default for FilterTrie<T> {
