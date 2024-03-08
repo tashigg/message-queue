@@ -3,6 +3,7 @@ use arbitrary::Arbitrary;
 use slotmap::SlotMap;
 use std::fmt::{Debug, Display, Formatter, Write};
 use std::hash::Hash;
+use std::ops::{Index, IndexMut};
 
 mod filter;
 mod node;
@@ -529,6 +530,20 @@ impl<'a, T> VacantEntry<'a, T> {
         let value = self.nodes[node_id][self.filter.leaf_kind].insert(value);
 
         (value, place_id)
+    }
+}
+
+impl<T> Index<&Filter> for FilterTrie<T> {
+    type Output = T;
+
+    fn index(&self, index: &Filter) -> &Self::Output {
+        self.get(index).expect("No entry found for filter")
+    }
+}
+
+impl<T> IndexMut<&Filter> for FilterTrie<T> {
+    fn index_mut(&mut self, index: &Filter) -> &mut Self::Output {
+        self.get_mut(index).expect("No entry found for filter")
     }
 }
 
