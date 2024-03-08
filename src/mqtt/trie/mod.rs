@@ -1,8 +1,8 @@
 #[cfg(feature = "arbitrary")]
 use arbitrary::Arbitrary;
 use slotmap::SlotMap;
-use std::fmt::{Debug, Display, Formatter, Write};
-use std::hash::Hash;
+use std::fmt::{self, Debug, Write};
+
 use std::ops::{Index, IndexMut};
 
 mod filter;
@@ -11,7 +11,7 @@ mod visitor;
 
 pub use filter::Filter;
 
-use node::{Data, Node, NodeId};
+use node::{Node, NodeId};
 
 use filter::{FilterToken, LeafKind};
 use visitor::NodePlace;
@@ -35,7 +35,7 @@ impl<T> Debug for FilterTrie<T>
 where
     T: Debug,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug_map = f.debug_map();
 
         #[derive(Clone, Copy)]
@@ -122,7 +122,7 @@ where
         struct DebugFilter<'a>(&'a [FilterToken], LeafKind);
 
         impl Debug for DebugFilter<'_> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.write_char('"')?;
                 let mut needs_sep = false;
                 for token in self.0 {
@@ -190,12 +190,15 @@ impl<T> FilterTrie<T> {
         })
     }
 
-    pub fn insert(&mut self, filter: Filter, value: T) -> Option<T> {
+    pub fn insert(&mut self, filter: Filter, value: T) -> (EntryId, Option<T>) {
         match self.entry(filter) {
-            Entry::Occupied(mut entry) => Some(entry.insert(value)),
+            Entry::Occupied(mut entry) => {
+                let place_id = entry.entry_id();
+                (place_id, Some(entry.insert(value)))
+            }
             Entry::Vacant(entry) => {
-                entry.insert(value);
-                None
+                let (_, place_id) = entry.insert(value);
+                (place_id, None)
             }
         }
     }
@@ -259,7 +262,10 @@ impl<T> FilterTrie<T> {
 
     pub fn remove_by_filter(&mut self, filter: &Filter) -> Option<T> {
         let entry_id = self.lookup(filter)?;
+        self.remove_by_id(entry_id)
+    }
 
+    pub fn remove_by_id(&mut self, entry_id: EntryId) -> Option<T> {
         self.entry_by_id(entry_id).map(IdEntry::remove)
     }
 }
@@ -321,6 +327,16 @@ impl<'a, T: 'a> IdEntry<'a, T> {
 
         // should be an `unwrap_unchecked`
         node[self.entry_id.leaf_kind].replace(value).unwrap()
+    }
+
+    pub fn remove_if(self, mut empty: impl FnMut(&T) -> bool) -> Option<T> {
+        if !empty(self.get()) {
+            return None;
+        }
+
+        Some(remove_entry(self.entry_id(), self.nodes, |node| {
+            node.leaf_data.all(&mut empty)
+        }))
     }
 
     pub fn remove(self) -> T {
@@ -547,106 +563,6 @@ impl<T> IndexMut<&Filter> for FilterTrie<T> {
     }
 }
 
-// "specialization" of a `FilterTrie` with some added niceties.
-// this is a different struct rather than a `type` because of coherence (blanket impl for T overlaps exact impl for `node::Data<K, V>`).
-pub struct FilterTrieMultiMap<K, V> {
-    map: FilterTrie<node::Data<K, V>>,
-    len: usize,
-}
-
-impl<K, V> Default for FilterTrieMultiMap<K, V> {
-    fn default() -> Self {
-        Self {
-            map: Default::default(),
-            len: 0,
-        }
-    }
-}
-
-impl<K, V> Debug for FilterTrieMultiMap<K, V>
-where
-    node::Data<K, V>: Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.map.fmt(f)
-    }
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-impl<K, V> FilterTrieMultiMap<K, V> {
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    /// Insert a new filter+key into the map
-    ///
-    /// Returns the old value for this filter, if present,
-    /// as well as an opaque ID for efficiently finding the entry again without traversing the trie.
-    pub fn insert(&mut self, filter: Filter, key: K, value: V) -> (EntryId, Option<V>) {
-        let (map, place) = self.map.entry(filter).or_default();
-
-        let replaced = map.insert(key, value);
-        self.len += replaced.is_none() as usize;
-
-        (place, replaced)
-    }
-
-    pub fn visit_matches(&self, topic_name: &TopicName<'_>, mut f: impl FnMut(&K, &V)) {
-        debug_assert!(!topic_name.0.is_empty(), "invalid empty topic name");
-        visitor::VisitMatches::new(&topic_name.0, &mut |map: &Data<K, V>| {
-            map.iter().for_each(|(k, v)| f(k, v))
-        })
-        .visit_node(&self.map.nodes, self.map.root)
-    }
-
-    /// Find and remove a key that was previously added for `filter`.
-    pub fn remove_by_filter(&mut self, filter: &Filter, key: &K) -> Option<V> {
-        let entry_id = self.map.lookup(filter)?;
-
-        self.remove_by_id(entry_id, key)
-    }
-
-    /// Remove a key using a previously returned `EntryId`.
-    pub fn remove_by_id(&mut self, entry_id: EntryId, key: &K) -> Option<V> {
-        let EntryId { node_id, leaf_kind } = entry_id;
-
-        let end = &mut self.map.nodes[node_id];
-
-        let leaf = &mut end[leaf_kind];
-
-        let v = leaf.as_mut()?.remove(key);
-
-        self.len -= v.is_some() as usize;
-
-        if end.is_multimap_empty() {
-            remove_entry(entry_id, &mut self.map.nodes, |node| {
-                node.is_multimap_empty()
-            });
-        }
-
-        v
-    }
-}
-
-/// A valid Topic Name per the MQTT v5 spec.
-///
-/// https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901107
-///
-/// A Topic Name must not be zero-length, nor may it contain wildcard characters or a null byte (`\0`).
-///
-/// A Topic Name in a `PUBLISH` packet _may_ be empty if a Topic Alias is used,
-/// but that alias *must* be resolved to a topic string before calling `parse()`.
 #[derive(Debug)]
 pub struct TopicName<'a>(Vec<NameToken<'a>>);
 
@@ -693,8 +609,8 @@ impl<'a> TryFrom<&'a str> for TopicName<'a> {
     }
 }
 
-impl Display for TopicName<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for TopicName<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.root())?;
 
         for token in &self.0[1..] {
@@ -731,7 +647,7 @@ pub enum ParseError {
 #[cfg(test)]
 mod tests {
     use super::filter::Filter;
-    use super::{FilterTrieMultiMap, TopicName};
+    use super::{FilterTrie, TopicName};
 
     #[derive(Eq, PartialEq, Debug)]
     struct NoClone<T>(T);
@@ -739,49 +655,42 @@ mod tests {
     #[test]
     fn insert_remove_by_filter() {
         let filter: Filter = "foo/bar".parse().unwrap();
-        let mut trie = FilterTrieMultiMap::new();
-        trie.insert(filter.clone(), 0, NoClone(0));
+        let mut trie = FilterTrie::new();
 
-        assert_eq!(trie.remove_by_filter(&filter, &0).map(|it| it.0), Some(0));
+        assert_eq!(trie.insert(filter.clone(), NoClone(0)).1, None);
+        assert_eq!(trie.remove_by_filter(&filter), Some(NoClone(0)));
 
         let values = [
             ("foo", 0),
             ("foo/bar", 0),
             ("foo/baz", 0),
             ("foo/#", 0),
-            ("foo/baz", 1),
             ("#", 2),
             ("/", 0),
         ];
 
-        for (idx, &(filter, key)) in values.iter().enumerate() {
-            trie.insert(filter.parse().unwrap(), key, NoClone(idx as i32 + 1));
+        for &(filter, value) in values.iter() {
+            trie.insert(filter.parse().unwrap(), NoClone(value));
         }
 
-        for (idx, &(filter, key)) in values.iter().enumerate() {
-            dbg!(idx, &trie);
-
+        for &(filter, value) in values.iter() {
             assert_eq!(
-                trie.remove_by_filter(&filter.parse().unwrap(), &key)
-                    .map(|it| it.0),
-                Some(idx as i32 + 1)
+                trie.remove_by_filter(&filter.parse().unwrap()),
+                Some(NoClone(value)),
+                "expected filter `{filter}` to be removed"
             );
         }
     }
+
     #[test]
     fn insert_remove_by_id() {
-        let filter: Filter = "foo/bar".parse().unwrap();
-        let mut trie = FilterTrieMultiMap::new();
-        trie.insert(filter.clone(), 0, NoClone(0));
-
-        assert_eq!(trie.remove_by_filter(&filter, &0).map(|it| it.0), Some(0));
+        let mut trie = FilterTrie::new();
 
         let values = [
             ("foo", 0),
             ("foo/bar", 0),
             ("foo/baz", 0),
             ("foo/#", 0),
-            ("foo/baz", 1),
             ("#", 2),
             ("/", 0),
         ];
@@ -789,29 +698,24 @@ mod tests {
         // Test insert and remove_by_place
         let places: Vec<_> = values
             .iter()
-            .enumerate()
-            .map(|(idx, &(filter, key))| {
-                trie.insert(filter.parse().unwrap(), key, NoClone(idx as i32 + 1))
-                    .0
-            })
+            .copied()
+            .map(|(filter, value)| trie.insert(filter.parse().unwrap(), NoClone(value)).0)
             .collect();
 
-        for (idx, (&(_filter, key), place)) in values.iter().zip(places).enumerate() {
+        for ((filter, value), place) in values.iter().copied().zip(places) {
             assert_eq!(
-                trie.remove_by_id(place, &key).map(|it| it.0),
-                Some(idx as i32 + 1)
+                trie.remove_by_id(place),
+                Some(NoClone(value)),
+                "expected filter `{filter}` to be removed"
             );
         }
     }
 
     #[track_caller]
-    fn matches_sorted<V: Ord + Copy>(
-        trie: &FilterTrieMultiMap<i32, V>,
-        topic_name: &str,
-    ) -> Vec<V> {
+    fn matches_sorted<V: Ord + Copy>(trie: &FilterTrie<V>, topic_name: &str) -> Vec<V> {
         let mut seen = Vec::new();
 
-        trie.visit_matches(&TopicName::parse(topic_name).unwrap(), |_k, v| {
+        trie.visit_matches(&TopicName::parse(topic_name).unwrap(), |v| {
             seen.push(*v);
         });
 
@@ -823,22 +727,13 @@ mod tests {
     #[test]
     fn all_matches() {
         let values = [
-            ("foo", 0),
-            ("foo/bar", 0),
-            ("foo/baz", 0),
-            ("+/bar", 1),
-            ("foo/#", 0),
-            ("foo/baz", 1),
-            ("#", 2),
-            ("foo//", 0),
-            ("/+", 0),
-            ("/", 0),
+            "foo", "foo/bar", "foo/baz", "+/bar", "foo/#", "foo/baz", "#", "foo//", "/+", "/",
         ];
 
-        let mut trie = FilterTrieMultiMap::new();
+        let mut trie = FilterTrie::new();
 
-        for &(filter, key) in values.clone().iter() {
-            trie.insert(filter.parse().unwrap(), key, filter);
+        for filter in values {
+            trie.insert(filter.parse().unwrap(), filter);
         }
 
         expect_test::expect![[r##"
@@ -855,7 +750,6 @@ mod tests {
             [
                 "#",
                 "foo/#",
-                "foo/baz",
                 "foo/baz",
             ]
         "##]]

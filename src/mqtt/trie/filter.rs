@@ -169,12 +169,3 @@ impl<'a> arbitrary::Arbitrary<'a> for LeafKind {
         (1, Some(1))
     }
 }
-impl LeafKind {
-    /// Returns `true` if the leaf kind is [`Any`].
-    ///
-    /// [`Any`]: LeafKind::Any
-    #[must_use]
-    pub(super) fn is_any(&self) -> bool {
-        matches!(self, Self::Any)
-    }
-}

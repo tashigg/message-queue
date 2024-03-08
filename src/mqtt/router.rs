@@ -7,7 +7,7 @@ use std::ops::{Index, IndexMut};
 use std::sync::{Arc, OnceLock};
 
 use slotmap::SecondaryMap;
-use tashi_collections::HashSet;
+use tashi_collections::{HashMap, HashSet};
 use tashi_consensus_engine::{CreatorId, Message, MessageStream, Platform, PlatformEvent};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
@@ -20,7 +20,7 @@ use crate::map_join_error;
 use rumqttd_shim::protocol::{QoS, RetainForwardRule, SubscribeReasonCode};
 
 use crate::mqtt::packets::PacketId;
-use crate::mqtt::trie::{self, Filter, FilterTrieMultiMap, TopicName};
+use crate::mqtt::trie::{self, Filter, FilterTrie, TopicName};
 use crate::mqtt::{ClientId, ConnectionId};
 use crate::tce_message::{
     BytesAsOctetString, PublishMeta, PublishTrasaction, TimestampSeconds, Transaction,
@@ -331,7 +331,7 @@ enum SubscriptionKind {
     Sys,
 }
 
-type SubscriptionMap = FilterTrieMultiMap<ConnectionId, Subscription>;
+type SubscriptionMap = FilterTrie<HashMap<ConnectionId, Subscription>>;
 
 struct Subscription {
     id: Option<SubscriptionId>,
@@ -412,7 +412,10 @@ impl RouterState {
 
         for &kind in SubscriptionKind::ALL {
             for place_id in conn_state.subscriptions[kind].drain() {
-                self.subscriptions[kind].remove_by_id(place_id, &conn_id);
+                if let Some(mut entry) = self.subscriptions[kind].entry_by_id(place_id) {
+                    entry.get_mut().remove(&conn_id);
+                    entry.remove_if(|map| map.is_empty());
+                }
             }
         }
     }
@@ -527,13 +530,12 @@ fn handle_command(state: &mut RouterState, conn_id: ConnectionId, command: Route
 
                             let qos = props.qos;
 
-                            let (place, _replaced) = state.subscriptions[sub_kind].insert(
-                                filter,
-                                conn_id,
-                                Subscription { id: sub_id, props },
-                            );
+                            let (map, place_id) =
+                                state.subscriptions[sub_kind].entry(filter).or_default();
 
-                            state.connections[conn_id].subscriptions[sub_kind].insert(place);
+                            map.insert(conn_id, Subscription { id: sub_id, props });
+
+                            state.connections[conn_id].subscriptions[sub_kind].insert(place_id);
 
                             Ok(SubscribeReasonCode::Success(qos))
                         })
@@ -682,36 +684,40 @@ fn dispatch(state: &mut RouterState, publish: PublishTrasaction, origin: Publish
         SubscriptionKind::App
     };
 
-    tracing::trace!(
-        "dispatching to {} potential matches",
-        state.subscriptions[kind].len()
-    );
-    state.subscriptions[kind].visit_matches(&topic, |&conn_id, sub| {
-        if state.dead_connections.contains(&conn_id) {
-            return;
-        }
+    // fixme: len
+    // tracing::trace!(
+    //     "dispatching for {} potential filter matches",
+    //     state.subscriptions[kind].len()
+    // );
 
-        let _span = tracing::info_span!(
-            "match",
-            client_id = state.connections[conn_id].client_id,
-            topic = publish.topic
-        )
-        .entered();
+    state.subscriptions[kind].visit_matches(&topic, |map| {
+        for (&conn_id, sub) in map.iter() {
+            if state.dead_connections.contains(&conn_id) {
+                continue;
+            }
 
-        tracing::trace!("dispatching PUBLISH to client");
+            let _span = tracing::info_span!(
+                "match",
+                client_id = state.connections[conn_id].client_id,
+                topic = publish.topic
+            )
+            .entered();
 
-        let res = state.connections[conn_id]
-            .message_tx
-            .send(RouterMessage::Publish {
-                sub_id: sub.id,
-                props: sub.props.clone(),
-                txn: publish.clone(),
-            });
+            tracing::trace!("dispatching PUBLISH to client");
 
-        if res.is_err() {
-            tracing::trace!("client channel closed; marking as dead");
-            // Memoize dead connections for asynchronous cleanup so we can continue dispatching.
-            state.dead_connections.insert(conn_id);
+            let res = state.connections[conn_id]
+                .message_tx
+                .send(RouterMessage::Publish {
+                    sub_id: sub.id,
+                    props: sub.props.clone(),
+                    txn: publish.clone(),
+                });
+
+            if res.is_err() {
+                tracing::trace!("client channel closed; marking as dead");
+                // Memoize dead connections for asynchronous cleanup so we can continue dispatching.
+                state.dead_connections.insert(conn_id);
+            }
         }
     });
 }

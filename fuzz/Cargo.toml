@@ -29,13 +29,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "trie_multi_map"
-path = "fuzz_targets/trie_multi_map.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "rumqtt_proto_v5"
 path = "fuzz_targets/rumqtt_proto_v5.rs"
 test = false
