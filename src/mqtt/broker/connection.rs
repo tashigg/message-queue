@@ -125,7 +125,9 @@ impl Connection {
                     let _ = self.disconnect(reason, message).await;
                 }
                 Ok(ConnectionError::Protocol(e)) => {
-                    let _ = self.disconnect(DisconnectReasonCode::ProtocolError, e.to_string());
+                    let _ = self
+                        .disconnect(DisconnectReasonCode::ProtocolError, e.to_string())
+                        .await;
                 }
                 Ok(other) => {
                     tracing::debug!("packet error from run_inner(): {other:?}");
@@ -248,7 +250,6 @@ impl Connection {
                 ))
                 .await?;
             }
-            RouterMessage::PubAck { .. } => {}
         }
 
         Ok(())

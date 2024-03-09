@@ -29,6 +29,7 @@ pub struct IncomingPacketSet {
     packets: HashMap<PacketId, IncomingPacketKind>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum IncomingPacketKind {
     Pub(IncomingPub),
@@ -135,6 +136,7 @@ impl IncomingPacketSet {
     // TODO: other packet kinds
 }
 
+#[allow(dead_code)]
 impl OutgoingPackets {
     pub fn new() -> Self {
         let mut free_packet_ids = RoaringBitmap::new();

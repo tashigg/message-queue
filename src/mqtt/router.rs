@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
 use tokio::task;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::Span;
 
 use crate::map_join_error;
@@ -31,6 +32,7 @@ const COMMAND_CAPACITY: usize = 128;
 static SYSTEM_TX: OnceLock<mpsc::UnboundedSender<SystemCommand>> = OnceLock::new();
 
 pub struct MqttRouter {
+    system_tx: mpsc::UnboundedSender<SystemCommand>,
     command_tx: mpsc::Sender<(ConnectionId, RouterCommand)>,
     task: JoinHandle<crate::Result<()>>,
 }
@@ -54,16 +56,21 @@ pub struct FilterProperties {
 }
 
 impl MqttRouter {
-    pub fn start(tce_platform: Arc<Platform>, tce_messages: MessageStream) -> Self {
+    pub fn start(
+        tce_platform: Arc<Platform>,
+        tce_messages: MessageStream,
+        token: CancellationToken,
+    ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
 
         let (system_tx, system_rx) = mpsc::unbounded_channel();
 
         SYSTEM_TX
-            .set(system_tx)
+            .set(system_tx.clone())
             .expect("BUG: MqttRouter initialized more than once!");
 
         let state = RouterState {
+            token,
             connections: Default::default(),
             // This should round up to 256 buckets.
             dead_connections: HashSet::with_capacity_and_hasher(200, Default::default()),
@@ -86,7 +93,15 @@ impl MqttRouter {
         // for some reason, possibly just copying Actix.
         let task = task::spawn(run(state));
 
-        MqttRouter { command_tx, task }
+        MqttRouter {
+            system_tx,
+            command_tx,
+            task,
+        }
+    }
+
+    pub fn disconnected(&mut self, conn_id: ConnectionId) {
+        let _ = self.system_tx.send(SystemCommand::Disconnected { conn_id });
     }
 
     pub fn handle(&self) -> RouterHandle {
@@ -228,6 +243,9 @@ enum RouterCommand {
 }
 
 enum SystemCommand {
+    Disconnected {
+        conn_id: ConnectionId,
+    },
     Publish {
         source: Span,
         txn: PublishTrasaction,
@@ -239,9 +257,9 @@ pub enum RouterMessage {
         packet_id: PacketId,
         return_codes: Vec<SubscribeReasonCode>,
     },
-    PubAck {
-        packet_id: PacketId,
-    },
+    // PubAck {
+    //     packet_id: PacketId,
+    // },
     Publish {
         sub_id: Option<SubscriptionId>,
         // This type should be small since it's just a couple `bool`s and `enum`s.
@@ -251,6 +269,8 @@ pub enum RouterMessage {
 }
 
 struct RouterState {
+    token: CancellationToken,
+
     connections: SecondaryMap<ConnectionId, ConnectionState>,
     /// The set of connections that are currently known to be dead.
     ///
@@ -442,6 +462,9 @@ async fn run(mut state: RouterState) -> crate::Result<()> {
             () = tokio::task::yield_now(), if !state.dead_connections.is_empty() => {
                 state.pop_dead_connection();
             }
+            _ = state.token.cancelled() => {
+                break;
+            }
         }
     }
 
@@ -582,6 +605,11 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
 
 fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
     match command {
+        SystemCommand::Disconnected {
+            conn_id: connnection_id,
+        } => {
+            state.evict_connection(connnection_id);
+        }
         SystemCommand::Publish { source, txn } => {
             dispatch(state, txn, PublishOrigin::System { source });
         }

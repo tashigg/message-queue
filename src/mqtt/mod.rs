@@ -8,7 +8,7 @@ pub use rumqttd_shim::protocol;
 
 pub mod broker;
 mod session;
-mod trie;
+pub mod trie;
 
 mod publish;
 

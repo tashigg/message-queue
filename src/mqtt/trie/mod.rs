@@ -170,6 +170,7 @@ where
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl<K, V> FilterTrieMultiMap<K, V> {
     pub fn new() -> Self {
         Self::default()
@@ -189,9 +190,14 @@ impl<K, V> Default for FilterTrieMultiMap<K, V> {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
     /// Insert a new filter+key into the map
@@ -312,6 +318,7 @@ impl<'a> Arbitrary<'a> for TopicName<'a> {
 
         match Self::parse(s) {
             Ok(it) => Ok(it),
+            Err(ParseError::TopicEmpty) => Err(arbitrary::Error::NotEnoughData),
             Err(ParseError::UnexpectedCharacter { ch: _, idx }) => {
                 Ok(Self::parse(&s[..idx]).unwrap())
             }
@@ -361,7 +368,7 @@ impl<'a> TopicName<'a> {
     ///
     /// A Topic Name may not be empty, but its root segment will be if the string starts with `/`.
     pub fn root(&self) -> &'a str {
-        self.0.get(0).expect("BUG: TopicName may not be empty").0
+        self.0.first().expect("BUG: TopicName may not be empty").0
     }
 }
 

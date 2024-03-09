@@ -3,7 +3,6 @@
 use std::hint::black_box;
 
 use bytes::BytesMut;
-use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
 
 use rumqttd_shim::protocol::v5::V5;

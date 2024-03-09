@@ -342,7 +342,7 @@ impl<'de> der::DecodeValue<'de> for UserProperties {
 impl der::EncodeValue for UserProperties {
     fn value_len(&self) -> der::Result<Length> {
         self.0.iter().try_fold(Length::ZERO, |sum, (key, val)| {
-            sum + encoded_pair_len(key, val)?
+            sum + encoded_pair_len(key, val)?.for_tlv()?
         })
     }
 
@@ -362,7 +362,7 @@ impl der::EncodeValue for UserProperties {
 
 fn encoded_pair_len(key: &str, val: &str) -> der::Result<Length> {
     // https://github.com/RustCrypto/formats/issues/1365
-    (Utf8StringRef::new(key)?.encoded_len() + Utf8StringRef::new(val)?.encoded_len()?)?.for_tlv()
+    Utf8StringRef::new(key)?.encoded_len() + Utf8StringRef::new(val)?.encoded_len()?
 }
 
 #[cfg(test)]

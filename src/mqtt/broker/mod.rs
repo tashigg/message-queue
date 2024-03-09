@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use connection::Connection;
 
 use crate::config::users::UsersConfig;
-use crate::mqtt::router::{MqttRouter, RouterHandle};
+use crate::mqtt::router::{system_publish, MqttRouter, RouterHandle};
 use crate::mqtt::session::{InactiveSessions, Session};
 use crate::mqtt::{ClientId, ConnectionId};
 use crate::password::PasswordHashingPool;
@@ -106,12 +106,14 @@ impl MqttBroker {
 
         let (broker_tx, broker_rx) = mpsc::channel(100);
 
-        let router = MqttRouter::start(tce_platform.clone(), tce_messages);
+        let token = CancellationToken::new();
+
+        let router = MqttRouter::start(tce_platform.clone(), tce_messages, token.clone());
 
         Ok(MqttBroker {
             listen_addr,
             listener,
-            token: CancellationToken::new(),
+            token,
             connections: SlotMap::with_capacity_and_key(256),
             tasks: JoinSet::new(),
             shared: Arc::new(Shared {
@@ -140,6 +142,8 @@ impl MqttBroker {
                     shutdown = true;
                 }
                 Some(Ok(data)) = self.tasks.join_next() => {
+                    self.router.disconnected(data.id);
+                    self.connections.remove(data.id);
                     handle_connection_lost(&mut self.inactive_sessions, data);
                 }
                 res = self.listener.accept() => {
@@ -218,6 +222,8 @@ impl MqttBroker {
     pub async fn shutdown(mut self) -> crate::Result<()> {
         // Closes any pending connections and stops listening for new ones.
         drop(self.listener);
+
+        system_publish("$SYS/notices", "shutting down");
 
         self.token.cancel();
 
