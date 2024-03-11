@@ -20,7 +20,7 @@ use crate::map_join_error;
 use rumqttd_shim::protocol::{QoS, RetainForwardRule, SubscribeReasonCode};
 
 use crate::mqtt::packets::PacketId;
-use crate::mqtt::trie::{Filter, FilterTrieMultiMap, TopicName, TriePlaceId};
+use crate::mqtt::trie::{self, Filter, FilterTrieMultiMap, TopicName};
 use crate::mqtt::{ClientId, ConnectionId};
 use crate::tce_message::{
     BytesAsOctetString, PublishMeta, PublishTrasaction, TimestampSeconds, Transaction,
@@ -318,9 +318,9 @@ struct Subscriptions {
 #[derive(Default)]
 struct ConnectionSubscriptions {
     /// Indexes into `Subscriptions::app`
-    app: HashSet<TriePlaceId>,
+    app: HashSet<trie::EntryId>,
     /// Indexes into `Subscriptions::sys`
-    sys: HashSet<TriePlaceId>,
+    sys: HashSet<trie::EntryId>,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -365,7 +365,7 @@ impl IndexMut<SubscriptionKind> for Subscriptions {
 }
 
 impl Index<SubscriptionKind> for ConnectionSubscriptions {
-    type Output = HashSet<TriePlaceId>;
+    type Output = HashSet<trie::EntryId>;
 
     fn index(&self, kind: SubscriptionKind) -> &Self::Output {
         match kind {
@@ -412,7 +412,7 @@ impl RouterState {
 
         for &kind in SubscriptionKind::ALL {
             for place_id in conn_state.subscriptions[kind].drain() {
-                self.subscriptions[kind].remove_by_place(place_id, &conn_id);
+                self.subscriptions[kind].remove_by_id(place_id, &conn_id);
             }
         }
     }

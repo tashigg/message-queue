@@ -25,7 +25,7 @@ pub struct FilterTrieMultiMap<K, V> {
 /// An opaque index into a [`FilterTrieMultiMap`] for quickly finding an entry
 /// without traversing the whole tree.
 #[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
-pub struct TriePlaceId {
+pub struct EntryId {
     node_id: NodeId,
     leaf_kind: LeafKind,
 }
@@ -203,7 +203,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
     ///
     /// Returns the old value for this filter, if present,
     /// as well as an opaque ID for efficiently finding the entry again without traversing the trie.
-    pub fn insert(&mut self, filter: Filter, key: K, value: V) -> (TriePlaceId, Option<V>) {
+    pub fn insert(&mut self, filter: Filter, key: K, value: V) -> (EntryId, Option<V>) {
         let leaf_kind = filter.leaf_kind;
         let mut visitor = WalkFilter::new(filter);
 
@@ -229,7 +229,7 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
         self.len += 1;
 
         (
-            TriePlaceId {
+            EntryId {
                 node_id: end,
                 leaf_kind,
             },
@@ -250,12 +250,12 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
         // if we don't have the node for the filter, we certainly won't have the key/value.
         let node_id = visitor.visit_node(&self.nodes, self.root).ok()?;
 
-        self.remove_by_place(TriePlaceId { node_id, leaf_kind }, key)
+        self.remove_by_id(EntryId { node_id, leaf_kind }, key)
     }
 
     /// Remove a key using a previously returned `TriePlaceId`.
-    pub fn remove_by_place(&mut self, place_id: TriePlaceId, key: &K) -> Option<V> {
-        let TriePlaceId { node_id, leaf_kind } = place_id;
+    pub fn remove_by_id(&mut self, place_id: EntryId, key: &K) -> Option<V> {
+        let EntryId { node_id, leaf_kind } = place_id;
 
         let end = &mut self.nodes[node_id];
 
@@ -429,7 +429,7 @@ mod tests {
         }
     }
     #[test]
-    fn insert_remove_by_place() {
+    fn insert_remove_by_id() {
         let filter: Filter = "foo/bar".parse().unwrap();
         let mut trie = FilterTrieMultiMap::new();
         trie.insert(filter.clone(), 0, NoClone(0));
@@ -460,7 +460,7 @@ mod tests {
 
         for (idx, (&(_filter, key), place)) in values.iter().zip(places).enumerate() {
             assert_eq!(
-                trie.remove_by_place(place, &key).map(|it| it.0),
+                trie.remove_by_id(place, &key).map(|it| it.0),
                 Some(idx as i32 + 1)
             );
         }
