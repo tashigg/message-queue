@@ -79,7 +79,9 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
     users.auth.merge(&args.auth_config);
 
     if users.by_username.is_empty() && !users.auth.allow_anonymous_login {
-        let command = std::env::args().next().expect("run without any args?");
+        let command = std::env::args()
+            .next()
+            .unwrap_or_else(|| "tashi-message-queue".to_string());
 
         eyre::bail!(
             "Broker will be impossible to use in current configuration; \

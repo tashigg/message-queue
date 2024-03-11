@@ -320,6 +320,10 @@ impl<'a> Arbitrary<'a> for TopicName<'a> {
             Ok(it) => Ok(it),
             Err(ParseError::TopicEmpty) => Err(arbitrary::Error::NotEnoughData),
             Err(ParseError::UnexpectedCharacter { ch: _, idx }) => {
+                if idx == 0 {
+                    return Err(arbitrary::Error::NotEnoughData);
+                }
+
                 Ok(Self::parse(&s[..idx]).unwrap())
             }
         }

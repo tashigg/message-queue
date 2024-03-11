@@ -189,7 +189,12 @@ impl Connection {
         match message {
             RouterMessage::Publish { sub_id, props, txn } => {
                 let packet_id = (props.qos != QoS::AtMostOnce)
-                    .then(|| self.outgoing_packets.insert_publish(props.qos));
+                    .then(|| {
+                        self.outgoing_packets
+                            .insert_publish(props.qos)
+                            .or_else(|e| disconnect!(ProtocolError, "{e}"))
+                    })
+                    .transpose()?;
 
                 self.send(Packet::Publish(
                     Publish::with_all(

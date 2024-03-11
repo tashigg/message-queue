@@ -1,4 +1,3 @@
-use roaring::RoaringBitmap;
 use std::num::NonZeroU16;
 
 use tashi_collections::HashMap;
@@ -9,6 +8,8 @@ use rumqttd_shim::protocol::{QoS, SubscribeReasonCode};
 pub struct PacketId(NonZeroU16);
 
 impl PacketId {
+    const ONE: PacketId = PacketId(NonZeroU16::MIN);
+
     pub fn new(id: u16) -> Option<PacketId> {
         NonZeroU16::new(id).map(Self)
     }
@@ -19,6 +20,13 @@ impl PacketId {
 
     pub fn opt_to_raw(opt: Option<PacketId>) -> u16 {
         opt.map_or(0, Self::get)
+    }
+
+    /// Increment `self` or wrap around to 1, returning the previous value.
+    fn wrapping_increment(&mut self) -> Self {
+        let ret = *self;
+        *self = PacketId(self.0.checked_add(1).unwrap_or(NonZeroU16::MIN));
+        ret
     }
 }
 
@@ -73,11 +81,18 @@ pub struct OutgoingPackets {
     // We generate packet IDs locally, but it's conceivable that a malicious client could manipulate
     // this using a clever ordering of `PUBACKS` and `PUBLISH`es from a different connection.
     publishes: HashMap<PacketId, OutgoingPublish>,
-    free_packet_ids: RoaringBitmap,
+    next_packet_id: PacketId,
 }
 
 #[derive(Debug)]
 pub struct OutgoingPublish {
+    pub qos: QoS,
+}
+
+#[derive(thiserror::Error, Debug)]
+#[error("packet ID {} ({qos:?}) never acknowledged", self.packet_id.get())]
+pub struct InsertPublishError {
+    pub packet_id: PacketId,
     pub qos: QoS,
 }
 
@@ -139,13 +154,13 @@ impl IncomingPacketSet {
 #[allow(dead_code)]
 impl OutgoingPackets {
     pub fn new() -> Self {
-        let mut free_packet_ids = RoaringBitmap::new();
-        // A valid packet ID cannot be zero.
-        free_packet_ids.insert_range(1..=65535);
-
         OutgoingPackets {
             publishes: HashMap::default(),
-            free_packet_ids,
+            // RFC: MQTT.js starts at a random offset and then increments, but it's not clear why:
+            // https://github.com/mqttjs/MQTT.js/blob/2b751861f2af7b914c3eb84265fb8474428045ec/src/lib/default-message-id-provider.ts#L49
+            //
+            // The linked issue is just them forgetting to ensure `nextId` is at least 1.
+            next_packet_id: PacketId::ONE,
         }
     }
 
@@ -153,39 +168,32 @@ impl OutgoingPackets {
         self.publishes.len()
     }
 
-    pub fn insert_publish(&mut self, qos: QoS) -> PacketId {
+    pub fn insert_publish(&mut self, qos: QoS) -> Result<PacketId, InsertPublishError> {
+        use tashi_collections::hash_map;
+
         assert_ne!(
             qos,
             QoS::AtMostOnce,
             "QoS 0 PUBLISHes cannot be assigned a packet ID"
         );
 
-        let packet_id = self
-            .free_packet_ids
-            .min()
-            .expect("BUG: out of free packet IDs");
+        let packet_id = self.next_packet_id.wrapping_increment();
 
-        let packet_id = PacketId(
-            NonZeroU16::new(
-                u16::try_from(packet_id).expect("BUG: packet IDs exceeded max value of `u16`"),
-            )
-            .expect("BUG: packet IDs cannot be zero"),
-        );
-
-        self.free_packet_ids.remove(packet_id.0.get() as u32);
-
-        self.publishes
-            .insert(packet_id, OutgoingPublish { qos })
-            .expect("BUG: replaced existing packet");
-
-        packet_id
+        match self.publishes.entry(packet_id) {
+            hash_map::Entry::Vacant(vacant) => {
+                vacant.insert(OutgoingPublish { qos });
+                Ok(packet_id)
+            }
+            // If we wrapped around and the client still hasn't ack'd a packet,
+            // treat it as a logic error.
+            hash_map::Entry::Occupied(occupied) => Err(InsertPublishError {
+                packet_id,
+                qos: occupied.get().qos,
+            }),
+        }
     }
 
     pub fn ack_publish(&mut self, packet_id: PacketId) -> Option<OutgoingPublish> {
-        let publish = self.publishes.remove(&packet_id)?;
-
-        self.free_packet_ids.insert(packet_id.0.get() as u32);
-
-        Some(publish)
+        self.publishes.remove(&packet_id)
     }
 }
