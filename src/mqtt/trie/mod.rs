@@ -414,6 +414,7 @@ mod tests {
             ("foo/#", 0),
             ("foo/baz", 1),
             ("#", 2),
+            ("/", 0),
         ];
 
         for (idx, &(filter, key)) in values.iter().enumerate() {
@@ -446,6 +447,7 @@ mod tests {
             ("foo/#", 0),
             ("foo/baz", 1),
             ("#", 2),
+            ("/", 0),
         ];
 
         // Test insert and remove_by_place
@@ -494,6 +496,7 @@ mod tests {
             ("#", 2),
             ("foo//", 0),
             ("/+", 0),
+            ("/", 0),
         ];
 
         let mut trie = FilterTrieMultiMap::new();
@@ -560,6 +563,17 @@ mod tests {
             ]
         "##]]
         .assert_debug_eq(&matches_sorted(&trie, "foo/"));
+
+        // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901245
+        // > because the single-level wildcard matches only a single level, “sport/+” does not match “sport” but it does match “sport/”.
+        expect_test::expect![[r##"
+            [
+                "#",
+                "/",
+                "/+",
+            ]
+        "##]]
+        .assert_debug_eq(&matches_sorted(&trie, "/"));
     }
 
     #[test]
@@ -615,6 +629,22 @@ mod tests {
             )
         "#]]
         .assert_debug_eq(&TopicName::parse("///"));
+
+        expect_test::expect![[r#"
+            Ok(
+                TopicName(
+                    [
+                        NameToken(
+                            "",
+                        ),
+                        NameToken(
+                            "",
+                        ),
+                    ],
+                ),
+            )
+        "#]]
+        .assert_debug_eq(&TopicName::parse("/"));
 
         // Fails
         expect_test::expect![[r#"
