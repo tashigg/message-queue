@@ -27,6 +27,7 @@ pub mod router;
 #[allow(warnings)]
 pub mod segments;
 
+use bytes::Bytes;
 pub use router::{shared_subs::Strategy, Router, RouterConfig};
 
 use crate::protocol::QoS;
@@ -38,6 +39,24 @@ type Offset = (u64, u64);
 
 impl protocol::Publish {
     // Getters for crate-private fields
+
+    pub fn with_all(
+        dup: bool,
+        qos: QoS,
+        pkid: u16,
+        retain: bool,
+        topic: Bytes,
+        payload: Bytes,
+    ) -> Self {
+        Self {
+            dup,
+            qos,
+            pkid,
+            retain,
+            topic,
+            payload,
+        }
+    }
 
     pub fn dup(&self) -> bool {
         self.dup

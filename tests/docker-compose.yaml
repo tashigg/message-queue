@@ -18,6 +18,8 @@ services:
       mesh-app-bridge:
         aliases:
         - broker1.example.com
+    environment: &broker_env
+      RUST_LOG: tashi_consensus_engine=warn,tashi_message_queue=trace
     entrypoint: target/release/tashi-message-queue
     command: run --secret-key-file dmq/key_0.pem /home/message-queue/dmq
 
@@ -29,14 +31,20 @@ services:
     volumes:
       - ./dmq:/home/message-queue/dmq
     ports:
-      - "1884:1884"
+      - "1884:1883"
     networks:
       mesh-app-bridge:
         aliases:
         - broker2.example.com
+    environment: *broker_env
     entrypoint: target/release/tashi-message-queue
     command: run --secret-key-file dmq/key_1.pem /home/message-queue/dmq
 
 networks:
   mesh-app-bridge:
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        # Explicitly specify a subnet to use so we can reference it in the address book.
+        - subnet: "172.16.238.0/24"

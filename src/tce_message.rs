@@ -2,17 +2,17 @@ use bytes::Bytes;
 use std::fmt::Debug;
 use std::time::SystemTime;
 
-use der::asn1::{BitStringRef, OctetString, OctetStringRef};
-use der::{Encode, Header, Length, Reader, Tag, TagNumber, Writer};
+use der::asn1::{BitStringRef, OctetString, OctetStringRef, Utf8StringRef};
+use der::{Decode, Encode, Header, Length, Reader, Tag, TagNumber, Writer};
 
 use rumqttd_shim::protocol::QoS;
 
-#[derive(der::Sequence)]
+#[derive(der::Sequence, Debug)]
 pub struct Transaction {
     pub data: TransactionData,
 }
 
-#[derive(der::Choice)]
+#[derive(der::Choice, Debug)]
 #[asn1(tag_mode = "EXPLICIT")]
 pub enum TransactionData {
     #[asn1(context_specific = "2", constructed = "true")]
@@ -21,7 +21,7 @@ pub enum TransactionData {
 
 // Transcoding to DER was chosen so that we are not baking-in a specific version of the MQTT protocol.
 /// DER mapping of [`rumqttd::protocol::Packet::Publish`].
-#[derive(der::Sequence)]
+#[derive(der::Sequence, Debug)]
 pub struct PublishTrasaction {
     pub topic: String,
     pub meta: PublishMeta,
@@ -43,7 +43,7 @@ pub struct PublishTrasaction {
 ///
 /// `topic_alias` and `subscription_identifiers` are omitted as they are only used between
 /// a client and a broker.
-#[derive(der::Sequence)]
+#[derive(der::Sequence, Debug)]
 pub struct PublishTransactionProperties {
     // Note: these match the tag bytes used by the MQTT protocol, where possible.
     #[asn1(context_specific = "1", optional = "true")]
@@ -71,8 +71,7 @@ pub struct PublishTransactionProperties {
 
     // Specified as 38 (0x26) but context_specific tags don't go that high
     #[asn1(context_specific = "30", optional = "true")]
-    // The `der` crate doesn't support tuples, but it does support arrays
-    pub user_properties: Option<Vec<[String; 2]>>,
+    pub user_properties: Option<UserProperties>,
 }
 
 impl TryFrom<Transaction> for tashi_consensus_engine::ApplicationTransaction {
@@ -96,7 +95,7 @@ impl der::FixedTag for PublishMeta {
 }
 impl der::EncodeValue for PublishMeta {
     fn value_len(&self) -> der::Result<der::Length> {
-        BitStringRef::new(4, &[self.0])?.encoded_len()
+        BitStringRef::new(4, &[self.0])?.value_len()
     }
 
     fn encode_value(&self, encoder: &mut impl der::Writer) -> der::Result<()> {
@@ -286,9 +285,91 @@ impl TimestampSeconds {
     }
 }
 
+// The `der` crate doesn't support tuples,
+// so we have to transcode to/from `SEQUENCE OF (SEQUENCE OF STRING)`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UserProperties(pub Vec<(String, String)>);
+
+impl UserProperties {
+    pub fn new<I, K, V>(props: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        Self(
+            props
+                .into_iter()
+                .map(|(k, v)| (k.into(), v.into()))
+                .collect(),
+        )
+    }
+}
+
+impl der::FixedTag for UserProperties {
+    const TAG: Tag = Tag::Sequence;
+}
+
+impl<'de> der::DecodeValue<'de> for UserProperties {
+    fn decode_value<R: Reader<'de>>(reader: &mut R, header: Header) -> der::Result<Self> {
+        reader.read_nested(header.length, |reader| {
+            let mut properties = Vec::new();
+
+            while !reader.is_finished() {
+                let seq_header = der::Header::decode(reader)?;
+
+                if seq_header.tag != Tag::Sequence {
+                    return Err(reader.error(der::ErrorKind::TagUnexpected {
+                        expected: Some(Tag::Sequence),
+                        actual: seq_header.tag,
+                    }));
+                }
+
+                let pair = reader.read_nested(seq_header.length, |reader| {
+                    let key = String::decode(reader)?;
+                    let value = String::decode(reader)?;
+                    Ok((key, value))
+                })?;
+
+                properties.push(pair);
+            }
+
+            Ok(UserProperties(properties))
+        })
+    }
+}
+
+impl der::EncodeValue for UserProperties {
+    fn value_len(&self) -> der::Result<Length> {
+        self.0.iter().try_fold(Length::ZERO, |sum, (key, val)| {
+            sum + encoded_pair_len(key, val)?.for_tlv()?
+        })
+    }
+
+    fn encode_value(&self, encoder: &mut impl Writer) -> der::Result<()> {
+        for (key, val) in &self.0 {
+            let pair_len = encoded_pair_len(key, val)?;
+            let header = Header::new(Tag::Sequence, pair_len)?;
+
+            header.encode(encoder)?;
+            key.encode(encoder)?;
+            val.encode(encoder)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn encoded_pair_len(key: &str, val: &str) -> der::Result<Length> {
+    // https://github.com/RustCrypto/formats/issues/1365
+    Utf8StringRef::new(key)?.encoded_len() + Utf8StringRef::new(val)?.encoded_len()?
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::tce_message::{PublishMeta, QoS};
+    use crate::tce_message::{PublishMeta, QoS, UserProperties};
+
+    use der::{Decode, Encode};
 
     #[test]
     fn publish_meta() {
@@ -309,5 +390,26 @@ mod tests {
         assert_eq!(meta.qos(), QoS::ExactlyOnce);
         assert!(!meta.retain());
         assert!(meta.dup());
+    }
+
+    #[test]
+    fn user_properties() {
+        let props = UserProperties(vec![]);
+        let encoded_props = props.to_der().unwrap();
+        let decoded_props = UserProperties::from_der(&encoded_props).unwrap();
+
+        assert_eq!(props, decoded_props);
+
+        let props = UserProperties::new([("foo", "bar")]);
+        let encoded_props = props.to_der().unwrap();
+        let decoded_props = UserProperties::from_der(&encoded_props).unwrap();
+
+        assert_eq!(props, decoded_props);
+
+        let props = UserProperties::new([("foo", "bar"), ("hello", "world"), ("tashi", "gg")]);
+        let encoded_props = props.to_der().unwrap();
+        let decoded_props = UserProperties::from_der(&encoded_props).unwrap();
+
+        assert_eq!(props, decoded_props);
     }
 }

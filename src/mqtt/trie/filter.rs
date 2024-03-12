@@ -29,7 +29,7 @@ impl<'a> Arbitrary<'a> for Filter {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let tokens: Vec<_> = u.arbitrary()?;
 
-        let leaf_kind = if tokens.len() != 0 {
+        let leaf_kind = if !tokens.is_empty() {
             u.arbitrary()?
         } else {
             LeafKind::Any
@@ -80,6 +80,13 @@ impl FromStr for Filter {
     }
 }
 
+impl Filter {
+    /// Get the root of this filter, if it's a literal string and not a wildcard.
+    pub fn root_literal(&self) -> Option<&str> {
+        self.tokens.first().and_then(FilterToken::as_literal)
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum FilterParseError {
     /// Filter must not be empty.
@@ -127,9 +134,16 @@ impl FilterToken {
             FilterToken::WildPlus => true,
         }
     }
+
+    pub fn as_literal(&self) -> Option<&str> {
+        match self {
+            FilterToken::Literal(lit) => Some(lit),
+            _ => None,
+        }
+    }
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(super) enum LeafKind {
     /// No wildcard.
     Exact,

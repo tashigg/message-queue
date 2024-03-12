@@ -1,8 +1,9 @@
 const mqtt = require("mqtt");
 
 beforeAll(async () => {
-    client1 = await mqtt.connectAsync("mqtt://localhost:1883");
-    client2 = await mqtt.connectAsync("mqtt://localhost:1884");
+    // Defaults to 4 otherwise
+    client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+    client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
 });
 
 test("publish to node1, receive from node2", async () => {

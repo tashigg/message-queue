@@ -4,7 +4,7 @@
 //!
 //! The protocol specification for MQTT v5 can be found at:
 //! https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html
-pub use rumqttd_shim::{protocol, router};
+pub use rumqttd_shim::protocol;
 
 pub mod broker;
 mod session;
@@ -12,8 +12,14 @@ pub mod trie;
 
 mod publish;
 
+mod router;
+
+mod packets;
+
 // It's a String to match rumqtt's type, but it could be [u8; 23] if we wanted.
 type ClientId = String;
+
+slotmap::new_key_type! { struct ConnectionId; }
 
 /// Max length of a UTF-8 string allowed by the MQTT spec.
 ///

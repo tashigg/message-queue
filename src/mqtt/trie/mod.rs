@@ -1,13 +1,13 @@
 #[cfg(feature = "arbitrary")]
 use arbitrary::Arbitrary;
 use slotmap::SlotMap;
-use std::fmt::{Debug, Write};
+use std::fmt::{Debug, Display, Formatter, Write};
 use std::hash::Hash;
 mod filter;
 mod node;
 mod visitor;
 
-pub use filter::{Filter, FilterParseError};
+pub use filter::Filter;
 
 use node::{Data, Node, NodeId};
 
@@ -17,6 +17,15 @@ use crate::mqtt::trie::visitor::WalkFilter;
 pub struct FilterTrieMultiMap<K, V> {
     root: NodeId,
     nodes: SlotMap<NodeId, Node<K, V>>,
+    len: usize,
+}
+
+/// An opaque index into a [`FilterTrieMultiMap`] for quickly finding an entry
+/// without traversing the whole tree.
+#[derive(Copy, Clone, Hash, PartialEq, Eq, Debug)]
+pub struct TriePlaceId {
+    node_id: NodeId,
+    leaf_kind: LeafKind,
 }
 
 impl<K, V> Debug for FilterTrieMultiMap<K, V>
@@ -161,6 +170,7 @@ where
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl<K, V> FilterTrieMultiMap<K, V> {
     pub fn new() -> Self {
         Self::default()
@@ -172,15 +182,29 @@ impl<K, V> Default for FilterTrieMultiMap<K, V> {
         let mut nodes = SlotMap::default();
         let root = nodes.insert(Node::root());
 
-        Self { nodes, root }
+        Self {
+            nodes,
+            root,
+            len: 0,
+        }
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Insert a new filter+key into the map
     ///
-    /// Returns the old value for this filter, if present.
-    pub fn insert(&mut self, filter: Filter, key: K, value: V) -> Option<V> {
+    /// Returns the old value for this filter, if present,
+    /// as well as an opaque ID for efficiently finding the entry again without traversing the trie.
+    pub fn insert(&mut self, filter: Filter, key: K, value: V) -> (TriePlaceId, Option<V>) {
         let leaf_kind = filter.leaf_kind;
         let mut visitor = WalkFilter::new(filter);
 
@@ -199,9 +223,19 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
             }
         };
 
-        self.nodes[end][leaf_kind]
+        let replaced = self.nodes[end][leaf_kind]
             .get_or_insert_with(Default::default)
-            .insert(key, value)
+            .insert(key, value);
+
+        self.len += 1;
+
+        (
+            TriePlaceId {
+                node_id: end,
+                leaf_kind,
+            },
+            replaced,
+        )
     }
 
     pub fn visit_matches(&self, topic_name: &TopicName<'_>, mut f: impl FnMut(&K, &V)) {
@@ -209,22 +243,32 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
         visitor::VisitMatches::new(&topic_name.0, &mut f).visit_node(&self.nodes, self.root)
     }
 
-    pub fn remove(&mut self, filter: Filter, key: &K) -> Option<V> {
+    /// Find and remove a key that was previously added for `filter`.
+    pub fn remove_by_filter(&mut self, filter: Filter, key: &K) -> Option<V> {
         let leaf_kind = filter.leaf_kind;
         let mut visitor = WalkFilter::new(filter);
 
         // if we don't have the node for the filter, we certainly won't have the key/value.
-        let node = visitor.visit_node(&self.nodes, self.root).ok()?;
+        let node_id = visitor.visit_node(&self.nodes, self.root).ok()?;
 
-        let end = &mut self.nodes[node];
+        self.remove_by_place(TriePlaceId { node_id, leaf_kind }, key)
+    }
+
+    /// Remove a key using a previously returned `TriePlaceId`.
+    pub fn remove_by_place(&mut self, place_id: TriePlaceId, key: &K) -> Option<V> {
+        let TriePlaceId { node_id, leaf_kind } = place_id;
+
+        let end = &mut self.nodes[node_id];
 
         let leaf = &mut end[leaf_kind];
 
         let ret = leaf.as_mut()?.remove(key);
 
-        // this loop nees to be weirdly split over iterations,
+        self.len -= 1;
+
+        // this loop needs to be weirdly split over iterations,
         // iteratively remove nodes from the trie until we find either the root or a non empty node.
-        let mut current = node;
+        let mut current = node_id;
         loop {
             let node = &mut self.nodes[current];
 
@@ -232,7 +276,8 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
                 break;
             }
 
-            // don't remove the root node, we'll have to put it back and it's not like it gives us anything useful to get rid of.
+            // don't remove the root node, we'll have to put it back
+            // and it's not like it gives us anything useful to get rid of.
             if node.is_root() {
                 break;
             }
@@ -255,6 +300,14 @@ impl<K: Eq + Hash, V> FilterTrieMultiMap<K, V> {
     }
 }
 
+/// A valid Topic Name per the MQTT v5 spec.
+///
+/// https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901107
+///
+/// A Topic Name must not be zero-length, nor may it contain wildcard characters or a null byte (`\0`).
+///
+/// A Topic Name in a `PUBLISH` packet _may_ be empty if a Topic Alias is used,
+/// but that alias *must* be resolved to a topic string before calling `parse()`.
 #[derive(Debug)]
 pub struct TopicName<'a>(Vec<NameToken<'a>>);
 
@@ -265,7 +318,12 @@ impl<'a> Arbitrary<'a> for TopicName<'a> {
 
         match Self::parse(s) {
             Ok(it) => Ok(it),
+            Err(ParseError::TopicEmpty) => Err(arbitrary::Error::NotEnoughData),
             Err(ParseError::UnexpectedCharacter { ch: _, idx }) => {
+                if idx == 0 {
+                    return Err(arbitrary::Error::NotEnoughData);
+                }
+
                 Ok(Self::parse(&s[..idx]).unwrap())
             }
         }
@@ -273,7 +331,12 @@ impl<'a> Arbitrary<'a> for TopicName<'a> {
 }
 
 impl<'a> TopicName<'a> {
+    /// Parse a valid Topic Name as per the MQTT v5 spec. See the type docs for details.
     pub fn parse(s: &'a str) -> Result<Self, ParseError> {
+        if s.is_empty() {
+            return Err(ParseError::TopicEmpty);
+        }
+
         if let Some((idx, ch)) = s.char_indices().find(|it| matches!(it.1, '#' | '+' | '\0')) {
             return Err(ParseError::UnexpectedCharacter { ch, idx });
         }
@@ -291,6 +354,28 @@ impl<'a> TryFrom<&'a str> for TopicName<'a> {
     }
 }
 
+impl Display for TopicName<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.root())?;
+
+        for token in &self.0[1..] {
+            f.write_char('/')?;
+            f.write_str(token.0)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl<'a> TopicName<'a> {
+    /// Get the root of the topic, i.e. the first segment.
+    ///
+    /// A Topic Name may not be empty, but its root segment will be if the string starts with `/`.
+    pub fn root(&self) -> &'a str {
+        self.0.first().expect("BUG: TopicName may not be empty").0
+    }
+}
+
 /// A UTF-8 string containing no `\0` characters nor any operators.
 #[derive(Copy, Clone, Debug)]
 struct NameToken<'a>(&'a str);
@@ -300,6 +385,8 @@ pub enum ParseError {
     /// Found an unexpected character `ch` at `idx`.
     #[error("unexpected character `{ch}` at {idx}`")]
     UnexpectedCharacter { ch: char, idx: usize },
+    #[error("topic name cannot be empty; if a topic alias is used, it must have been resolved")]
+    TopicEmpty,
 }
 
 #[cfg(test)]
@@ -307,15 +394,19 @@ mod tests {
     use super::filter::Filter;
     use super::{FilterTrieMultiMap, TopicName};
 
+    #[derive(Eq, PartialEq)]
+    struct NoClone<T>(T);
+
     #[test]
-    fn insert_remove() {
-        #[derive(Eq, PartialEq)]
-        struct NoClone<T>(T);
+    fn insert_remove_by_filter() {
         let filter: Filter = "foo/bar".parse().unwrap();
         let mut trie = FilterTrieMultiMap::new();
         trie.insert(filter.clone(), 0, NoClone(0));
 
-        assert_eq!(trie.remove(filter.clone(), &0).map(|it| it.0), Some(0));
+        assert_eq!(
+            trie.remove_by_filter(filter.clone(), &0).map(|it| it.0),
+            Some(0)
+        );
 
         let values = [
             ("foo", 0),
@@ -326,13 +417,51 @@ mod tests {
             ("#", 2),
         ];
 
-        for (idx, &(filter, key)) in values.clone().iter().enumerate() {
+        for (idx, &(filter, key)) in values.iter().enumerate() {
             trie.insert(filter.parse().unwrap(), key, NoClone(idx as i32 + 1));
         }
 
         for (idx, &(filter, key)) in values.iter().enumerate() {
             assert_eq!(
-                trie.remove(filter.parse().unwrap(), &key).map(|it| it.0),
+                trie.remove_by_filter(filter.parse().unwrap(), &key)
+                    .map(|it| it.0),
+                Some(idx as i32 + 1)
+            );
+        }
+    }
+    #[test]
+    fn insert_remove_by_place() {
+        let filter: Filter = "foo/bar".parse().unwrap();
+        let mut trie = FilterTrieMultiMap::new();
+        trie.insert(filter.clone(), 0, NoClone(0));
+
+        assert_eq!(
+            trie.remove_by_filter(filter.clone(), &0).map(|it| it.0),
+            Some(0)
+        );
+
+        let values = [
+            ("foo", 0),
+            ("foo/bar", 0),
+            ("foo/baz", 0),
+            ("foo/#", 0),
+            ("foo/baz", 1),
+            ("#", 2),
+        ];
+
+        // Test insert and remove_by_place
+        let places: Vec<_> = values
+            .iter()
+            .enumerate()
+            .map(|(idx, &(filter, key))| {
+                trie.insert(filter.parse().unwrap(), key, NoClone(idx as i32 + 1))
+                    .0
+            })
+            .collect();
+
+        for (idx, (&(_filter, key), place)) in values.iter().zip(places).enumerate() {
+            assert_eq!(
+                trie.remove_by_place(place, &key).map(|it| it.0),
                 Some(idx as i32 + 1)
             );
         }
@@ -432,5 +561,112 @@ mod tests {
             ]
         "##]]
         .assert_debug_eq(&matches_sorted(&trie, "foo/"));
+    }
+
+    #[test]
+    fn topic_name_parse() {
+        // Succeeds
+        expect_test::expect![[r#"
+            Ok(
+                TopicName(
+                    [
+                        NameToken(
+                            "foo",
+                        ),
+                    ],
+                ),
+            )
+        "#]]
+        .assert_debug_eq(&TopicName::parse("foo"));
+
+        expect_test::expect![[r#"
+            Ok(
+                TopicName(
+                    [
+                        NameToken(
+                            "foo",
+                        ),
+                        NameToken(
+                            "bar",
+                        ),
+                    ],
+                ),
+            )
+        "#]]
+        .assert_debug_eq(&TopicName::parse("foo/bar"));
+
+        expect_test::expect![[r#"
+            Ok(
+                TopicName(
+                    [
+                        NameToken(
+                            "",
+                        ),
+                        NameToken(
+                            "",
+                        ),
+                        NameToken(
+                            "",
+                        ),
+                        NameToken(
+                            "",
+                        ),
+                    ],
+                ),
+            )
+        "#]]
+        .assert_debug_eq(&TopicName::parse("///"));
+
+        // Fails
+        expect_test::expect![[r#"
+            Err(
+                TopicEmpty,
+            )
+        "#]]
+        .assert_debug_eq(&TopicName::parse(""));
+
+        expect_test::expect![[r#"
+            Err(
+                UnexpectedCharacter {
+                    ch: '#',
+                    idx: 0,
+                },
+            )
+        "#]]
+        .assert_debug_eq(&TopicName::parse("#"));
+
+        expect_test::expect![[r#"
+            Err(
+                UnexpectedCharacter {
+                    ch: '+',
+                    idx: 0,
+                },
+            )
+        "#]]
+        .assert_debug_eq(&TopicName::parse("+"));
+
+        expect_test::expect![[r#"
+            Err(
+                UnexpectedCharacter {
+                    ch: '\0',
+                    idx: 7,
+                },
+            )
+        "#]]
+        .assert_debug_eq(&TopicName::parse("foo/bar\0"));
+    }
+
+    #[test]
+    fn topic_name_display() {
+        let topics = ["/", "/foo/bar", "foo", "foo/bar", "foo/bar/", "///"];
+
+        for topic in topics {
+            assert_eq!(
+                TopicName::parse(topic)
+                    .unwrap_or_else(|e| panic!("error parsing topic {topic:?}: {e:?}"))
+                    .to_string(),
+                topic
+            );
+        }
     }
 }
