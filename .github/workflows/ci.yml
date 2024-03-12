@@ -4,9 +4,9 @@ name: TMQ
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
-    branches: [main]
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       release-version:
@@ -89,7 +89,7 @@ jobs:
       SSH_AUTH_SOCK: $SSH_AUTH_SOCK
     defaults:
       run:
-          working-directory: tests
+        working-directory: tests
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,6 +107,8 @@ jobs:
       - name: Smoke test
         # We expect tests to fail for now
         continue-on-error: true
+        # May stall on some checks; keep trucking with the rest of the tests.
+        timeout-minutes: 5
         run: |
           docker run --net=host hivemq/mqtt-cli test -V5 -a
 
