@@ -1,7 +1,7 @@
-use bytes::Bytes;
 use std::fmt::Debug;
 use std::time::SystemTime;
 
+use bytes::Bytes;
 use der::asn1::{BitStringRef, OctetString, OctetStringRef, Utf8StringRef};
 use der::{Decode, Encode, Header, Length, Reader, Tag, TagNumber, Writer};
 
@@ -367,9 +367,9 @@ fn encoded_pair_len(key: &str, val: &str) -> der::Result<Length> {
 
 #[cfg(test)]
 mod tests {
-    use crate::tce_message::{PublishMeta, QoS, UserProperties};
-
     use der::{Decode, Encode};
+
+    use crate::tce_message::{PublishMeta, QoS, UserProperties};
 
     #[test]
     fn publish_meta() {

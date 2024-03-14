@@ -1,15 +1,14 @@
 use crate::mqtt::broker::{BrokerEvent, ConnectionData, Shared, TOPIC_ALIAS_MAX, TOPIC_MAX_LENGTH};
-use crate::mqtt::packets::{
-    IncomingPacketSet, IncomingSub, IncomingUnsub, OutgoingPackets, PacketId,
-};
+use crate::mqtt::packets::{IncomingPacketSet, IncomingSub, IncomingUnsub, PacketId};
 use crate::mqtt::publish::ValidateError;
 use crate::mqtt::router::{FilterProperties, RouterConnection, RouterMessage, SubscriptionId};
-use crate::mqtt::session::Session;
+use crate::mqtt::session::{Session, SessionStore};
 use crate::mqtt::trie::Filter;
-use crate::mqtt::{publish, ConnectionId};
+use crate::mqtt::{publish, ClientIndex, ConnectionId};
 use crate::tce_message::{Transaction, TransactionData};
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 
+use crate::mqtt::mailbox::OpenMailbox;
 use der::Encode;
 use protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
@@ -19,15 +18,21 @@ use protocol::{
 };
 use rand::distributions::{Alphanumeric, DistString};
 use rumqttd_protocol as protocol;
+use rumqttd_protocol::{PubComp, PubCompReason, PubRel, PubRelReason};
 use std::fmt::Display;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::{io, iter};
+use std::{cmp, io, iter};
 use tashi_collections::FnvHashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
+
+// TODO: make this configurable
+/// Default value for the Receive Maximum we send to the client,
+/// as well as the send quota we apply to outgoing traffic.
+const DEFAULT_RECEIVE_MAXIMUM: u16 = 1024;
 
 pub struct Connection {
     id: ConnectionId,
@@ -35,6 +40,7 @@ pub struct Connection {
     remote_addr: SocketAddr,
 
     client_id: String,
+    client_index: Option<ClientIndex>,
 
     protocol: protocol::v5::V5,
     stream: TcpStream,
@@ -43,7 +49,6 @@ pub struct Connection {
 
     token: CancellationToken,
     shared: Arc<Shared>,
-    session: Session,
 
     // The `u16` is client-generated which would suggest that we use a keyed hash map,
     // but it seems incredibly difficult to exploit this for a HashDOS attack if it's restricted
@@ -57,7 +62,11 @@ pub struct Connection {
     client_topic_aliases: FnvHashMap<u16, String>,
 
     incoming_packets: IncomingPacketSet,
-    outgoing_packets: OutgoingPackets,
+
+    /// The Receive Maximum reported by the client:
+    ///
+    /// https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901049
+    client_receive_maximum: u16,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -106,22 +115,24 @@ impl Connection {
             id,
             remote_addr,
             client_id: String::new(),
+            client_index: None,
             protocol: protocol::v5::V5,
             stream,
             read_buf: BytesMut::with_capacity(8192),
             write_buf: BytesMut::with_capacity(8192),
             token,
             shared,
-            session: Session::default(),
             client_topic_aliases: FnvHashMap::default(),
             incoming_packets: Default::default(),
-            outgoing_packets: OutgoingPackets::new(),
+            client_receive_maximum: DEFAULT_RECEIVE_MAXIMUM,
         }
     }
 
     #[tracing::instrument(name = "Connection::run", skip_all, fields(remote_addr=%self.remote_addr))]
     pub async fn run(mut self) -> ConnectionData {
-        if let Err(e) = self.run_inner().await {
+        let mut store = SessionStore::default();
+
+        if let Err(e) = self.run_inner(&mut store).await {
             match e.downcast::<ConnectionError>() {
                 Ok(ConnectionError::Disconnect { reason, message }) => {
                     let _ = self.disconnect(reason, message).await;
@@ -143,21 +154,34 @@ impl Connection {
         ConnectionData {
             id: self.id,
             client_id: self.client_id,
-            session: self.session,
+            client_index: self.client_index,
+            store,
         }
     }
 
-    async fn run_inner(&mut self) -> crate::Result<()> {
+    async fn run_inner(&mut self, store: &mut SessionStore) -> crate::Result<()> {
         // TODO: set timeouts on the `TcpStream` so a malicious client cannot hold it open forever
 
         let Some(packet) = self.recv().await? else {
             return Ok(());
         };
 
-        let Some(mut router) = self.handle_connect_packet(&packet).await? else {
+        let Some(router) = self.handle_connect_packet(store, &packet).await? else {
             tracing::info!("Router channel closed; exiting.");
             return Ok(());
         };
+
+        self.run_session(store, router).await
+    }
+
+    // Instrument with client ID once we have one assigned.
+    #[tracing::instrument(skip_all, fields(client_id=self.client_id))]
+    async fn run_session(
+        &mut self,
+        store: &mut SessionStore,
+        mut router: RouterConnection,
+    ) -> crate::Result<()> {
+        let mut mailbox = store.mailbox.open();
 
         loop {
             tokio::select! {
@@ -167,7 +191,7 @@ impl Connection {
                         break;
                     };
 
-                    self.handle_packet(&mut router, packet).await?;
+                    self.handle_packet(&mut store.session, &mut mailbox, &mut router, packet).await?;
                 },
                 maybe_msg = router.next_message() => {
                     let Some(msg) = maybe_msg else {
@@ -177,7 +201,10 @@ impl Connection {
 
                     self.handle_message(&mut router, msg).await?;
                 }
+                () = mailbox.process_deliveries() => {}
             }
+
+            self.handle_mail(&mut mailbox).await?;
         }
 
         Ok(())
@@ -189,55 +216,6 @@ impl Connection {
         message: RouterMessage,
     ) -> Result<(), ConnectionError> {
         match message {
-            RouterMessage::Publish { sub_id, props, txn } => {
-                let packet_id = (props.qos != QoS::AtMostOnce)
-                    .then(|| {
-                        self.outgoing_packets
-                            .insert_publish(props.qos)
-                            .or_else(|e| disconnect!(ProtocolError, "{e}"))
-                    })
-                    .transpose()?;
-
-                self.send(Packet::Publish(
-                    Publish::with_all(
-                        false,
-                        props.qos,
-                        PacketId::opt_to_raw(packet_id),
-                        false,
-                        Bytes::copy_from_slice(txn.topic.as_bytes()),
-                        txn.payload.0.clone(),
-                    ),
-                    (sub_id.is_some() || txn.properties.is_some()).then(|| {
-                        macro_rules! clone_prop {
-                            ($prop:ident) => {
-                                txn.properties
-                                    .as_ref()
-                                    .and_then(|props| props.$prop.clone())
-                            };
-                        }
-
-                        PublishProperties {
-                            payload_format_indicator: clone_prop!(payload_format_indicator),
-                            message_expiry_interval: clone_prop!(message_expiry_interval),
-                            topic_alias: None,
-                            response_topic: clone_prop!(response_topic),
-                            correlation_data: clone_prop!(correlation_data).map(|bytes| bytes.0),
-                            user_properties: clone_prop!(user_properties)
-                                .map_or(vec![], |props| props.0),
-
-                            // TODO: if there's multiple applicable subscriptions
-                            // we can bundle them into a single packet [TG-432].
-                            // It's an optional part of the protocol, however, and only applies to v5.
-                            subscription_identifiers: sub_id
-                                .map_or(vec![], |sub_id| vec![sub_id.into()]),
-
-                            content_type: clone_prop!(content_type),
-                        }
-                    }),
-                ))
-                .await?;
-            }
-
             RouterMessage::SubAck {
                 packet_id,
                 return_codes,
@@ -285,6 +263,8 @@ impl Connection {
 
     async fn handle_packet(
         &mut self,
+        _session: &mut Session,
+        mailbox: &mut OpenMailbox<'_>,
         router: &mut RouterConnection,
         packet: Packet,
     ) -> Result<(), ConnectionError> {
@@ -295,6 +275,76 @@ impl Connection {
             }
             Packet::Publish(publish, publish_props) => {
                 return self.handle_publish(router, publish, publish_props).await;
+            }
+            Packet::PubAck(puback, _) => {
+                let Some(packet_id) = PacketId::new(puback.pkid) else {
+                    disconnect!(ProtocolError, "PUBACK cannot use packet ID 0");
+                };
+
+                // The reason code doesn't actually matter:
+                // If PUBACK or PUBREC is received containing a Reason Code of 0x80 or greater
+                // the corresponding PUBLISH packet is treated as acknowledged,
+                // and MUST NOT be retransmitted [MQTT-4.4.0-2].
+                if let Err(e) = mailbox.puback(packet_id) {
+                    tracing::trace!(?packet_id, "invalid PUBACK: {e}");
+                }
+            }
+            Packet::PubRec(pubrec, _) => {
+                let Some(packet_id) = PacketId::new(pubrec.pkid) else {
+                    disconnect!(ProtocolError, "PUBREC cannot use packet ID 0");
+                };
+
+                // The reason code doesn't actually matter:
+                // If PUBACK or PUBREC is received containing a Reason Code of 0x80 or greater
+                // the corresponding PUBLISH packet is treated as acknowledged,
+                // and MUST NOT be retransmitted [MQTT-4.4.0-2].
+                let reason = match mailbox.pubrec(packet_id) {
+                    Ok(_) => PubRelReason::Success,
+                    Err(e) => {
+                        // Not fatal
+                        tracing::trace!(?packet_id, "invalid PUBREL: {e}");
+                        PubRelReason::PacketIdentifierNotFound
+                    }
+                };
+
+                self.send(Packet::PubRel(
+                    PubRel {
+                        pkid: packet_id.get(),
+                        reason,
+                    },
+                    None,
+                ))
+                .await?;
+            }
+            Packet::PubComp(pubcomp, _) => {
+                let Some(packet_id) = PacketId::new(pubcomp.pkid) else {
+                    disconnect!(ProtocolError, "PUBCOMP cannot use packet ID 0");
+                };
+
+                if let Err(e) = mailbox.pubcomp(packet_id) {
+                    tracing::trace!(?packet_id, "invalid PUBCOMP: {e}");
+                }
+            }
+            Packet::PubRel(pubrel, _) => {
+                let Some(packet_id) = PacketId::new(pubrel.pkid) else {
+                    disconnect!(ProtocolError, "PUBREL cannot use packet ID 0");
+                };
+
+                let reason = self
+                    .incoming_packets
+                    .remove_pub(packet_id)
+                    .map_or(PubCompReason::PacketIdentifierNotFound, |_| {
+                        PubCompReason::Success
+                    });
+
+                self.send(Packet::PubComp(
+                    PubComp {
+                        pkid: packet_id.get(),
+                        reason,
+                    },
+                    None,
+                ))
+                .await?;
             }
             Packet::Subscribe(sub, sub_props) => {
                 return self.handle_subscribe(router, sub, sub_props).await;
@@ -314,9 +364,48 @@ impl Connection {
         Ok(())
     }
 
+    async fn handle_mail(&mut self, mailbox: &mut OpenMailbox<'_>) -> crate::Result<()> {
+        while let Some(mail) = mailbox.next_ordered_unread() {
+            // Check send quota:
+            // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901251
+            //
+            // This is technically only part of the v5 version of the protocol,
+            // but there is nothing in v4 (3.1.1) that precludes us from applying flow control
+            // to those clients as well.
+            if mailbox.read_len() >= (self.client_receive_maximum as usize) {
+                break;
+            }
+
+            self.send(publish::txn_to_packet(
+                &mail.publish,
+                mail.duplicated,
+                mail.effective_qos,
+                Some(mail.packet_id),
+                &mail.subscription_ids,
+            ))
+            .await?;
+
+            mailbox.mark_ordered_read();
+        }
+
+        while let Some(mail) = mailbox.pop_unordered() {
+            self.send(publish::txn_to_packet(
+                &mail.publish,
+                false,
+                QoS::AtMostOnce,
+                None,
+                &mail.subscription_ids,
+            ))
+            .await?;
+        }
+
+        Ok(())
+    }
+
     // Handles disconnection internally, so does not return `PacketError`
     async fn handle_connect_packet(
         &mut self,
+        store: &mut SessionStore,
         packet: &Packet,
     ) -> crate::Result<Option<RouterConnection>> {
         let Packet::Connect(connect, connect_properties, last_will, last_will_properties, login) =
@@ -378,60 +467,81 @@ impl Connection {
             return Ok(None);
         }
 
-        let mut resuming_session = false;
+        // An empty client ID in the CONNECT does *not* imply a clean start.
+        let clean_session = /* assigned_client_id.is_some() || */ connect.clean_session;
 
-        if assigned_client_id.is_some() || connect.clean_session {
-            self.send_to_broker(BrokerEvent::ConnectionAccepted(
-                self.client_id.clone(),
-                None,
-            ))
-            .await?;
+        let (response_tx, response_rx) = oneshot::channel();
+
+        self.send_to_broker(BrokerEvent::ConnectionAccepted {
+            connection_id: self.id,
+            client_id: self.client_id.clone(),
+            clean_session,
+            response_tx,
+        })
+        .await?;
+
+        let response = response_rx.await?;
+
+        let session_present = if let Some(existing_session) = response.session {
+            *store = existing_session;
+            true
         } else {
-            let (session_tx, session_rx) = oneshot::channel();
-
-            self.send_to_broker(BrokerEvent::ConnectionAccepted(
-                self.client_id.clone(),
-                Some(session_tx),
-            ))
-            .await?;
-
-            if let Some(session) = session_rx.await? {
-                self.session = session;
-                resuming_session = true;
-            } else {
+            if !clean_session {
                 // It might have expired.
                 tracing::debug!(
                     self.client_id,
                     "expected a session, but it wasn't available"
                 );
             }
-        }
+
+            false
+        };
 
         if let Some(connection_properties) = connect_properties {
-            self.session.expiry = connection_properties.session_expiry_interval.into();
+            store.expiry = connection_properties.session_expiry_interval.into();
+
+            if let Some(receive_maximum) = connection_properties.receive_maximum {
+                self.client_receive_maximum =
+                    cmp::min(self.client_receive_maximum, receive_maximum);
+            }
         }
 
-        self.session.last_will = last_will.clone();
-        self.session.last_will_properties = last_will_properties.clone();
+        store.session.last_will = last_will.clone();
+        store.session.last_will_properties = last_will_properties.clone();
+
+        // TODO: don't enable this for v4
+        store.mailbox.coalesce_deliveries(true);
 
         let router = self
             .shared
             .router
-            .connected(self.id, self.client_id.clone())
+            .connected(
+                self.id,
+                response.client_index,
+                self.client_id.clone(),
+                store.mailbox.sender(),
+                clean_session,
+            )
             .await?;
 
         self.send(Packet::ConnAck(
             ConnAck {
-                session_present: resuming_session,
+                session_present,
                 code: ConnectReturnCode::Success,
             },
             Some(ConnAckProperties {
                 assigned_client_identifier: assigned_client_id,
-                // TODO: support wildcard subscriptions
-                wildcard_subscription_available: Some(0),
+                // A value is 0 means that Wildcard Subscriptions are not supported.
+                // A value of 1 means Wildcard Subscriptions are supported.
+                // If not present, then Wildcard Subscriptions are supported.
+                // (I know it's just one byte, but why waste the bandwidth if `true` is the default?)
+                //
+                // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901091
+                wildcard_subscription_available: None,
                 // TODO: support shared subscriptions
                 shared_subscription_available: Some(0),
-                // TODO: support subscription identifiers
+                // Same as `wildcard_subscriptions_available`
+                // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901092
                 subscription_identifiers_available: Some(0),
                 // TODO: support retained messages
                 retain_available: Some(0),
@@ -453,10 +563,49 @@ impl Connection {
         let qos = publish.qos();
         let pkid = publish.pkid();
 
-        if (pkid == 0) != (qos == QoS::AtMostOnce) {
+        let packet_id = PacketId::new(pkid);
+
+        if let Some(packet_id) = packet_id {
+            if qos == QoS::AtMostOnce {
+                disconnect!(
+                    ProtocolError,
+                    "QoS set to 0 but packet ID was nonzero: {packet_id:?}"
+                );
+            }
+
+            if self.incoming_packets.contains(packet_id) {
+                match qos {
+                    QoS::AtMostOnce => unreachable!("we just checked QoS 0 above"),
+                    QoS::AtLeastOnce => {
+                        self.send(Packet::PubAck(
+                            PubAck {
+                                pkid,
+                                reason: PubAckReason::PacketIdentifierInUse,
+                            },
+                            None,
+                        ))
+                        .await?;
+                    }
+                    QoS::ExactlyOnce => {
+                        // Client is not supposed to send a `PUBREL` after this.
+                        self.send(Packet::PubRec(
+                            PubRec {
+                                pkid,
+                                reason: PubRecReason::PacketIdentifierInUse,
+                            },
+                            None,
+                        ))
+                        .await?;
+                    }
+                }
+
+                return Ok(());
+            }
+        } else if qos != QoS::AtMostOnce {
             disconnect!(
                 ProtocolError,
-                "packet ID must be nonzero if QoS is not 0, otherwise both must be 0"
+                "QoS set to {} but packet ID was 0",
+                qos as u8,
             );
         }
 
@@ -531,6 +680,10 @@ impl Connection {
                     None,
                 ))
                 .await?;
+
+                self.incoming_packets
+                    .insert_pub(packet_id.expect("BUG: `PacketId` should be `Some`"))
+                    .expect("BUG: QoS 2 PUBLISH should have been validated already");
             }
         }
 
@@ -762,7 +915,8 @@ impl Connection {
         self.send(Packet::Disconnect(
             Disconnect { reason_code },
             Some(DisconnectProperties {
-                session_expiry_interval: self.session.expiry.into(),
+                // The Session Expiry Interval MUST NOT be sent on a DISCONNECT by the Server [MQTT-3.14.2-2].
+                session_expiry_interval: None,
                 reason_string,
                 user_properties: vec![],
                 server_reference: None,

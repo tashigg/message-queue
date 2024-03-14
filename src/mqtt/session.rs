@@ -1,3 +1,4 @@
+use crate::mqtt::mailbox::Mailbox;
 use crate::mqtt::ClientId;
 use futures::StreamExt;
 use rumqttd_protocol::{LastWill, LastWillProperties};
@@ -11,12 +12,12 @@ use tokio_util::time::DelayQueue;
 /// This is only locked during client connection and disconnection.
 #[derive(Default)]
 pub(crate) struct InactiveSessions {
-    sessions: HashMap<ClientId, (Session, Option<tokio_util::time::delay_queue::Key>)>,
+    sessions: HashMap<ClientId, (SessionStore, Option<tokio_util::time::delay_queue::Key>)>,
     expirations: DelayQueue<ClientId>,
 }
 
 impl InactiveSessions {
-    pub fn insert(&mut self, client_id: ClientId, session: Session) {
+    pub fn insert(&mut self, client_id: ClientId, session: SessionStore) {
         let expiry_key = if let SessionExpiry::AfterConnectionClosed(duration) = session.expiry {
             Some(self.expirations.insert(client_id.clone(), duration))
         } else {
@@ -30,7 +31,7 @@ impl InactiveSessions {
         assert!(old_session.is_none());
     }
 
-    pub fn claim(&mut self, client_id: &ClientId) -> Option<Session> {
+    pub fn claim(&mut self, client_id: &ClientId) -> Option<SessionStore> {
         if let Some((session, expiry_key)) = self.sessions.remove(client_id) {
             if let Some(expiry_key) = expiry_key {
                 self.expirations.remove(&expiry_key);
@@ -42,12 +43,11 @@ impl InactiveSessions {
         }
     }
 
-    pub async fn process_expirations(&mut self) {
-        while let Some(client_id) = self.expirations.next().await {
-            let client_id = client_id.get_ref();
-            self.sessions.remove(client_id);
-            tracing::trace!(client_id, "session expired");
-        }
+    pub async fn next_expiration(&mut self) -> Option<ClientId> {
+        let client_id = self.expirations.next().await?.into_inner();
+        self.sessions.remove(&client_id);
+        tracing::trace!(client_id, "session expired");
+        Some(client_id)
     }
 }
 
@@ -91,10 +91,6 @@ impl From<SessionExpiry> for Option<u32> {
 // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Session_State
 #[derive(Default)]
 pub(crate) struct Session {
-    // The expiry is stored in the session because it's reported to the client
-    // on disconnect.
-    pub expiry: SessionExpiry,
-
     /// The last will's delay can be greater than the session's expiry, but
     /// session expiry always leads to the last will being sent, dropped, or
     /// overwritten (3.1.3.2.2).
@@ -102,9 +98,17 @@ pub(crate) struct Session {
     pub last_will_properties: Option<LastWillProperties>,
 }
 
-impl Session {
+// Separate type to allow `Mailbox` to be borrowed for the duration of a session.
+#[derive(Default)]
+pub(crate) struct SessionStore {
+    pub expiry: SessionExpiry,
+    pub session: Session,
+    pub mailbox: Mailbox,
+}
+
+impl SessionExpiry {
     pub fn should_save(&self) -> bool {
-        !matches!(self.expiry, SessionExpiry::OnConnectionClosed)
+        !matches!(self, SessionExpiry::OnConnectionClosed)
         // We could choose to prevent saving sessions that don't have any useful state.
     }
 }
