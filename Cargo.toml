@@ -1,8 +1,8 @@
 [workspace]
-members = [".", "rumqttd-shim", "fuzz"]
+members = [".", "rumqttd-protocol", "fuzz"]
 
 [workspace.dependencies]
-rumqttd-shim = { path = "rumqttd-shim" }
+rumqttd-protocol = { path = "rumqttd-protocol" }
 
 [package]
 name = "tashi-message-queue"
@@ -28,7 +28,7 @@ dotenvy = "0.15.7"
 hex = "0.4.3"
 num_enum = "0.7.2"
 rand = "0.8.5"
-rumqttd-shim.workspace = true
+rumqttd-protocol.workspace = true
 serde = { version = "1.0.196", features = ["derive", "std"] }
 thiserror = "1.0.56"
 toml = { version = "0.8.10", features = ["parse"] }

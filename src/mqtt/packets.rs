@@ -2,7 +2,7 @@ use std::num::NonZeroU16;
 
 use tashi_collections::HashMap;
 
-use rumqttd_shim::protocol::{QoS, SubscribeReasonCode};
+use rumqttd_protocol::{QoS, SubscribeReasonCode};
 
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Debug)]
 pub struct PacketId(NonZeroU16);

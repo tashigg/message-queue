@@ -1,3 +1,0 @@
-[submodule "rumqtt"]
-	path = rumqtt
-	url = https://github.com/tashigg/rumqtt
