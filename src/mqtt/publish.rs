@@ -2,11 +2,11 @@ use std::ops::Not;
 
 use tashi_collections::FnvHashMap;
 
-use rumqttd_shim::protocol;
-use rumqttd_shim::protocol::{
+use protocol::{
     DisconnectReasonCode, Packet, PubAck, PubAckProperties, PubAckReason, PubRec, PubRecProperties,
     PubRecReason, Publish, PublishProperties,
 };
+use rumqttd_protocol as protocol;
 use tce_message::PublishTrasaction;
 
 use crate::mqtt::MAX_STRING_LEN;

@@ -9,14 +9,14 @@ use crate::tce_message::{Transaction, TransactionData};
 use bytes::{Bytes, BytesMut};
 
 use der::Encode;
-use rand::distributions::{Alphanumeric, DistString};
-use rumqttd_shim::protocol;
-use rumqttd_shim::protocol::{
+use protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
     DisconnectReasonCode, Packet, PingResp, Protocol, PubAck, PubAckReason, PubRec, PubRecReason,
     Publish, PublishProperties, QoS, SubAck, Subscribe, SubscribeProperties, SubscribeReasonCode,
     UnsubAck, UnsubAckReason,
 };
+use rand::distributions::{Alphanumeric, DistString};
+use rumqttd_protocol as protocol;
 use std::fmt::Display;
 use std::io;
 use std::net::SocketAddr;

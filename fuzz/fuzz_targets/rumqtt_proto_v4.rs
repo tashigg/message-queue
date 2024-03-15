@@ -5,8 +5,8 @@ use std::hint::black_box;
 use bytes::BytesMut;
 use libfuzzer_sys::fuzz_target;
 
-use rumqttd_shim::protocol::v4::V4;
-use rumqttd_shim::protocol::Protocol;
+use rumqttd_protocol::v4::V4;
+use rumqttd_protocol::Protocol;
 
 fuzz_target!(|data: &[u8]| {
     let max = data.len();

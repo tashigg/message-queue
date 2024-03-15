@@ -7,7 +7,7 @@ WORKDIR /home/message-queue
 COPY Cargo.lock Cargo.toml ./
 COPY src/lib.rs src/lib.rs
 COPY src/main.rs src/main.rs
-COPY rumqttd-shim/ rumqttd-shim/
+COPY rumqttd-protocol/ rumqttd-protocol/
 COPY .cargo/config.toml .cargo/config.toml
 COPY fuzz/Cargo.toml fuzz/Cargo.toml
 COPY fuzz/fuzz_targets/ fuzz/fuzz_targets

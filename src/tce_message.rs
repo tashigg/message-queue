@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use der::asn1::{BitStringRef, OctetString, OctetStringRef, Utf8StringRef};
 use der::{Decode, Encode, Header, Length, Reader, Tag, TagNumber, Writer};
 
-use rumqttd_shim::protocol::QoS;
+use rumqttd_protocol::QoS;
 
 #[derive(der::Sequence, Debug)]
 pub struct Transaction {

@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Span;
 
 use crate::map_join_error;
-use rumqttd_shim::protocol::{QoS, RetainForwardRule, SubscribeReasonCode};
+use rumqttd_protocol::{QoS, RetainForwardRule, SubscribeReasonCode};
 
 use crate::mqtt::packets::PacketId;
 use crate::mqtt::trie::{self, Filter, FilterTrie, TopicName};

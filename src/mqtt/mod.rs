@@ -4,7 +4,7 @@
 //!
 //! The protocol specification for MQTT v5 can be found at:
 //! https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html
-pub use rumqttd_shim::protocol;
+pub use rumqttd_protocol as protocol;
 
 pub mod broker;
 mod session;
