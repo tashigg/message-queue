@@ -13,7 +13,7 @@ use protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
     DisconnectReasonCode, Packet, PingResp, Protocol, PubAck, PubAckReason, PubRec, PubRecReason,
     Publish, PublishProperties, QoS, SubAck, Subscribe, SubscribeProperties, SubscribeReasonCode,
-    UnsubAck, UnsubAckReason,
+    UnsubAck, UnsubAckReason, Unsubscribe,
 };
 use rand::distributions::{Alphanumeric, DistString};
 use rumqttd_protocol as protocol;
@@ -277,31 +277,7 @@ impl Connection {
                 return self.handle_subscribe(router, sub, sub_props).await;
             }
             Packet::Unsubscribe(unsub, _unsub_props) => {
-                if unsub.filters.is_empty() {
-                    disconnect!(ProtocolError, "no filters in UNSUBSCRIBE");
-                }
-
-                let reasons = unsub
-                    .filters
-                    .iter()
-                    .map(|filter| {
-                        self.session
-                            .subscriptions
-                            .remove(filter)
-                            .map_or(UnsubAckReason::NoSubscriptionExisted, |_| {
-                                UnsubAckReason::Success
-                            })
-                    })
-                    .collect();
-
-                self.send(Packet::UnsubAck(
-                    UnsubAck {
-                        pkid: unsub.pkid,
-                        reasons,
-                    },
-                    None,
-                ))
-                .await?;
+                return self.handle_unsubscribe(router, unsub).await;
             }
             Packet::Connect(..) => {
                 // MQTT-3.1.0-2
@@ -621,6 +597,40 @@ impl Connection {
             ))
             .await?;
         }
+
+        Ok(())
+    }
+
+    async fn handle_unsubscribe(
+        &mut self,
+        _router: &mut RouterConnection,
+        unsub: Unsubscribe,
+    ) -> Result<(), ConnectionError> {
+        if unsub.filters.is_empty() {
+            disconnect!(ProtocolError, "no filters in UNSUBSCRIBE");
+        }
+
+        let reasons = unsub
+            .filters
+            .iter()
+            .map(|filter| {
+                self.session
+                    .subscriptions
+                    .remove(filter)
+                    .map_or(UnsubAckReason::NoSubscriptionExisted, |_| {
+                        UnsubAckReason::Success
+                    })
+            })
+            .collect();
+
+        self.send(Packet::UnsubAck(
+            UnsubAck {
+                pkid: unsub.pkid,
+                reasons,
+            },
+            None,
+        ))
+        .await?;
 
         Ok(())
     }
