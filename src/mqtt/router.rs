@@ -349,6 +349,8 @@ enum SubscriptionKind {
     Sys,
 }
 
+// fixme: this should probably associate by client ID instead of connection ID.
+// Changing that probably means changing other things too to match.
 type SubscriptionMap = FilterTrie<HashMap<ConnectionId, Subscription>>;
 
 struct Subscription {

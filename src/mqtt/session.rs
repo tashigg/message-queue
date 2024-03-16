@@ -1,6 +1,6 @@
 use crate::mqtt::ClientId;
 use futures::StreamExt;
-use rumqttd_protocol::{Filter, LastWill, LastWillProperties};
+use rumqttd_protocol::{LastWill, LastWillProperties};
 use std::time::Duration;
 use tashi_collections::HashMap;
 use tokio_util::time::DelayQueue;
@@ -100,7 +100,6 @@ pub(crate) struct Session {
     /// overwritten (3.1.3.2.2).
     pub last_will: Option<LastWill>,
     pub last_will_properties: Option<LastWillProperties>,
-    pub subscriptions: HashMap<String, Filter>,
 }
 
 impl Session {
