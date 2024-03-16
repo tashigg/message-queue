@@ -431,17 +431,16 @@ impl<'a, T> OccupiedEntry<'a, T> {
         self.base.insert(value)
     }
 
-    fn remove_kv(self, empty_node: impl FnMut(&Node<T>) -> bool) -> (Filter, T) {
-        let value = remove_entry(self.entry_id(), self.base.nodes, empty_node);
-        (self.filter, value)
-    }
-
     pub fn remove_entry(self) -> (Filter, T) {
-        self.remove_kv(|node| node.is_empty())
+        (self.filter, self.base.remove())
     }
 
     pub fn remove(self) -> T {
         self.remove_entry().1
+    }
+
+    pub fn remove_if(self, empty: impl FnMut(&T) -> bool) -> Option<T> {
+        self.base.remove_if(empty)
     }
 }
 
