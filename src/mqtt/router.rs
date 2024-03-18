@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Span;
 
 use crate::map_join_error;
-use rumqttd_protocol::{QoS, RetainForwardRule, SubscribeReasonCode};
+use rumqttd_protocol::{QoS, RetainForwardRule, SubscribeReasonCode, UnsubAckReason};
 
 use crate::mqtt::packets::PacketId;
 use crate::mqtt::trie::{self, Filter, FilterTrie, TopicName};
@@ -174,6 +174,16 @@ impl RouterConnection {
             .send((self.connection_id, RouterCommand::Transaction(transaction)))
             .await;
     }
+
+    pub async fn unsubscribe(&mut self, packet_id: PacketId, filters: Vec<Filter>) {
+        let _ = self
+            .command_tx
+            .send((
+                self.connection_id,
+                RouterCommand::Unsubscribe { packet_id, filters },
+            ))
+            .await;
+    }
 }
 
 // `rumqttd` types subscription IDs as `usize` but the spec states a max value that fits in `u32`.
@@ -239,6 +249,10 @@ enum RouterCommand {
         /// If any index is `None`, that filter failed validation in the frontend.
         filters: Vec<Option<(Filter, FilterProperties)>>,
     },
+    Unsubscribe {
+        packet_id: PacketId,
+        filters: Vec<Filter>,
+    },
     Transaction(Transaction),
 }
 
@@ -256,6 +270,10 @@ pub enum RouterMessage {
     SubAck {
         packet_id: PacketId,
         return_codes: Vec<SubscribeReasonCode>,
+    },
+    UnsubAck {
+        packet_id: PacketId,
+        return_codes: Vec<UnsubAckReason>,
     },
     // PubAck {
     //     packet_id: PacketId,
@@ -331,6 +349,8 @@ enum SubscriptionKind {
     Sys,
 }
 
+// fixme: this should probably associate by client ID instead of connection ID.
+// Changing that probably means changing other things too to match.
 type SubscriptionMap = FilterTrie<HashMap<ConnectionId, Subscription>>;
 
 struct Subscription {
@@ -387,20 +407,23 @@ impl IndexMut<SubscriptionKind> for ConnectionSubscriptions {
 impl SubscriptionKind {
     const ALL: &'static [Self] = &[Self::App, Self::Sys];
 
-    fn from_filter(filter: &Filter) -> Result<Self, SubscribeReasonCode> {
+    fn from_filter(filter: &Filter) -> Result<Self, InvalidSubscriptionKind> {
         if let Some(root) = filter.root_literal() {
             if root.starts_with('$') {
                 if root.starts_with("$SYS") {
                     return Ok(Self::Sys);
                 }
 
-                return Err(SubscribeReasonCode::NotAuthorized);
+                return Err(InvalidSubscriptionKind);
             }
         }
 
         Ok(Self::App)
     }
 }
+
+/// A filter has an invalid namespace for the server.
+struct InvalidSubscriptionKind;
 
 impl RouterState {
     fn evict_connection(&mut self, conn_id: ConnectionId) {
@@ -526,7 +549,8 @@ fn handle_command(state: &mut RouterState, conn_id: ConnectionId, command: Route
                         // as they would have failed validation on the frontend.
                         .ok_or(SubscribeReasonCode::Unspecified)
                         .and_then(|(filter, props)| {
-                            let sub_kind = SubscriptionKind::from_filter(&filter)?;
+                            let sub_kind = SubscriptionKind::from_filter(&filter)
+                                .map_err(|_| SubscribeReasonCode::NotAuthorized)?;
 
                             let qos = props.qos;
 
@@ -547,6 +571,57 @@ fn handle_command(state: &mut RouterState, conn_id: ConnectionId, command: Route
             let conn_closed = state.connections[conn_id]
                 .message_tx
                 .send(RouterMessage::SubAck {
+                    packet_id,
+                    return_codes: reasons,
+                })
+                .is_err();
+
+            if conn_closed {
+                state.evict_connection(conn_id);
+            }
+        }
+        RouterCommand::Unsubscribe { packet_id, filters } => {
+            if !state.connections.contains_key(conn_id) {
+                return;
+            }
+
+            if state.connections[conn_id].message_tx.is_closed() {
+                state.evict_connection(conn_id);
+                return;
+            }
+
+            let reasons: Vec<_> = filters
+                .into_iter()
+                .map(|filter| {
+                    let sub_kind = match SubscriptionKind::from_filter(&filter) {
+                        Ok(it) => it,
+                        Err(_) => return UnsubAckReason::NoSubscriptionExisted,
+                    };
+
+                    let trie::Entry::Occupied(mut entry) =
+                        state.subscriptions[sub_kind].entry(filter)
+                    else {
+                        return UnsubAckReason::NoSubscriptionExisted;
+                    };
+
+                    entry.get_mut().remove(&conn_id);
+                    let entry_id = entry.entry_id();
+                    entry.remove_if(|map| map.is_empty());
+
+                    let removed =
+                        state.connections[conn_id].subscriptions[sub_kind].remove(&entry_id);
+
+                    if removed {
+                        UnsubAckReason::Success
+                    } else {
+                        UnsubAckReason::NoSubscriptionExisted
+                    }
+                })
+                .collect();
+
+            let conn_closed = state.connections[conn_id]
+                .message_tx
+                .send(RouterMessage::UnsubAck {
                     packet_id,
                     return_codes: reasons,
                 })

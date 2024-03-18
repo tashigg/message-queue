@@ -2,7 +2,7 @@ use std::num::NonZeroU16;
 
 use tashi_collections::HashMap;
 
-use rumqttd_protocol::{QoS, SubscribeReasonCode};
+use rumqttd_protocol::{QoS, SubscribeReasonCode, UnsubAckReason};
 
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Debug)]
 pub struct PacketId(NonZeroU16);
@@ -55,7 +55,10 @@ pub struct IncomingSub {
 }
 
 #[derive(Debug)]
-pub struct IncomingUnsub {}
+pub struct IncomingUnsub {
+    /// Reason codes for the pending `UNSUBACK`.
+    pub return_codes: Vec<UnsubAckReason>,
+}
 
 #[derive(Debug, thiserror::Error)]
 #[error("replaced {packet_id:?} with {replaced:?}")]
@@ -129,6 +132,14 @@ impl IncomingPacketSet {
         self.insert(packet_id, IncomingPacketKind::Sub(sub))
     }
 
+    pub fn insert_unsub(
+        &mut self,
+        packet_id: PacketId,
+        unsub: IncomingUnsub,
+    ) -> Result<(), ReplacedPacketError> {
+        self.insert(packet_id, IncomingPacketKind::Unsub(unsub))
+    }
+
     fn insert(
         &mut self,
         packet_id: PacketId,
@@ -146,6 +157,13 @@ impl IncomingPacketSet {
 
     pub fn remove_sub(&mut self, packet_id: PacketId) -> Result<IncomingSub, RemovePacketError> {
         remove_packet!(self, packet_id, IncomingPacketKind::Sub(sub) => sub)
+    }
+
+    pub fn remove_unsub(
+        &mut self,
+        packet_id: PacketId,
+    ) -> Result<IncomingUnsub, RemovePacketError> {
+        remove_packet!(self, packet_id, IncomingPacketKind::Unsub(unsub) => unsub)
     }
 
     // TODO: other packet kinds

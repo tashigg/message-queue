@@ -1,5 +1,7 @@
 use crate::mqtt::broker::{BrokerEvent, ConnectionData, Shared, TOPIC_ALIAS_MAX, TOPIC_MAX_LENGTH};
-use crate::mqtt::packets::{IncomingPacketSet, IncomingSub, OutgoingPackets, PacketId};
+use crate::mqtt::packets::{
+    IncomingPacketSet, IncomingSub, IncomingUnsub, OutgoingPackets, PacketId,
+};
 use crate::mqtt::publish::ValidateError;
 use crate::mqtt::router::{FilterProperties, RouterConnection, RouterMessage, SubscriptionId};
 use crate::mqtt::session::Session;
@@ -13,14 +15,14 @@ use protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
     DisconnectReasonCode, Packet, PingResp, Protocol, PubAck, PubAckReason, PubRec, PubRecReason,
     Publish, PublishProperties, QoS, SubAck, Subscribe, SubscribeProperties, SubscribeReasonCode,
-    UnsubAck, UnsubAckReason,
+    UnsubAck, UnsubAckReason, Unsubscribe,
 };
 use rand::distributions::{Alphanumeric, DistString};
 use rumqttd_protocol as protocol;
 use std::fmt::Display;
-use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::{io, iter};
 use tashi_collections::FnvHashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -235,6 +237,7 @@ impl Connection {
                 ))
                 .await?;
             }
+
             RouterMessage::SubAck {
                 packet_id,
                 return_codes,
@@ -250,6 +253,26 @@ impl Connection {
                     SubAck {
                         pkid: packet_id.get(),
                         return_codes,
+                    },
+                    None,
+                ))
+                .await?;
+            }
+
+            RouterMessage::UnsubAck {
+                packet_id,
+                return_codes,
+            } => {
+                let pending_unsub = self
+                    .incoming_packets
+                    .remove_unsub(packet_id)
+                    .expect("BUG: we forgot a packet ID");
+
+                let return_codes = merge_return_codes_2(pending_unsub.return_codes, return_codes);
+                self.send(Packet::UnsubAck(
+                    UnsubAck {
+                        pkid: packet_id.get(),
+                        reasons: return_codes,
                     },
                     None,
                 ))
@@ -277,31 +300,7 @@ impl Connection {
                 return self.handle_subscribe(router, sub, sub_props).await;
             }
             Packet::Unsubscribe(unsub, _unsub_props) => {
-                if unsub.filters.is_empty() {
-                    disconnect!(ProtocolError, "no filters in UNSUBSCRIBE");
-                }
-
-                let reasons = unsub
-                    .filters
-                    .iter()
-                    .map(|filter| {
-                        self.session
-                            .subscriptions
-                            .remove(filter)
-                            .map_or(UnsubAckReason::NoSubscriptionExisted, |_| {
-                                UnsubAckReason::Success
-                            })
-                    })
-                    .collect();
-
-                self.send(Packet::UnsubAck(
-                    UnsubAck {
-                        pkid: unsub.pkid,
-                        reasons,
-                    },
-                    None,
-                ))
-                .await?;
+                return self.handle_unsubscribe(router, unsub).await;
             }
             Packet::Connect(..) => {
                 // MQTT-3.1.0-2
@@ -625,6 +624,73 @@ impl Connection {
         Ok(())
     }
 
+    async fn handle_unsubscribe(
+        &mut self,
+        router: &mut RouterConnection,
+        unsub: Unsubscribe,
+    ) -> Result<(), ConnectionError> {
+        let Some(packet_id) = PacketId::new(unsub.pkid) else {
+            disconnect!(ProtocolError, "packet ID cannot be zero");
+        };
+
+        if self.incoming_packets.contains(packet_id) {
+            self.send(Packet::UnsubAck(
+                UnsubAck {
+                    pkid: unsub.pkid,
+                    reasons: iter::repeat(UnsubAckReason::PacketIdentifierInUse)
+                        .take(unsub.filters.len())
+                        .collect(),
+                },
+                None,
+            ))
+            .await?;
+
+            return Ok(());
+        }
+
+        let mut reasons = vec![UnsubAckReason::UnspecifiedError; unsub.filters.len()];
+        // not sure what's more expensive long run, overallocating when most of the filters aren't valid, or underallocating when they are.
+        let mut filters = Vec::new();
+
+        for (filter, code_out) in unsub.filters.into_iter().zip(&mut reasons) {
+            if filter.len() > TOPIC_MAX_LENGTH {
+                *code_out = UnsubAckReason::TopicFilterInvalid;
+                continue;
+            }
+
+            let Ok(filter) = filter.parse::<Filter>() else {
+                *code_out = UnsubAckReason::TopicFilterInvalid;
+                continue;
+            };
+
+            filters.push(filter);
+        }
+
+        if !filters.is_empty() {
+            self.incoming_packets
+                .insert_unsub(
+                    packet_id,
+                    IncomingUnsub {
+                        return_codes: reasons,
+                    },
+                )
+                .expect("BUG: we should have checked `.contains()` above");
+
+            router.unsubscribe(packet_id, filters).await;
+        } else {
+            self.send(Packet::UnsubAck(
+                UnsubAck {
+                    pkid: unsub.pkid,
+                    reasons,
+                },
+                None,
+            ))
+            .await?;
+        }
+
+        Ok(())
+    }
+
     async fn recv(&mut self) -> Result<Option<Packet>, ConnectionError> {
         loop {
             let mut read_len = match self.protocol.read_mut(&mut self.read_buf, usize::MAX) {
@@ -752,6 +818,23 @@ fn merge_return_codes(
     for (a, b) in left.iter_mut().zip(right) {
         if *a == SubscribeReasonCode::Unspecified {
             *a = b;
+        }
+    }
+
+    left
+}
+
+fn merge_return_codes_2(
+    mut left: Vec<UnsubAckReason>,
+    right: Vec<UnsubAckReason>,
+) -> Vec<UnsubAckReason> {
+    let mut right = right.into_iter();
+    for it in left.iter_mut() {
+        if *it == UnsubAckReason::UnspecifiedError {
+            // maybe it would be better to panic here
+            if let Some(code) = right.next() {
+                *it = code
+            }
         }
     }
 
