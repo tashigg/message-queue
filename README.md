@@ -33,7 +33,7 @@ openssl ec -in secret.pem -pubout -out public.pem
 ### Fuzzing (currently only possible on non-windows systems)
 > Note: libFuzzer needs LLVM sanitizer support, so this only works on x86-64 Linux,
 > x86-64 macOS and Apple-Silicon (aarch64) macOS for now. You'll also need a C++ compiler with C++11 support.
-Install `cargo-fuzz` and the nightly toolchain:
+> Install `cargo-fuzz` and the nightly toolchain:
 ```
 cargo install cargo-fuzz
 rustup toolchain install nightly
@@ -41,9 +41,11 @@ rustup +nightly component add llvm-tools-preview
 ```
 #### Run fuzzing commands
 note:
-you'll probably want to build the appropriate corpuses by starting at small max sizes ƒor a short amount of time, 
-then move up by powers of two until you reach the size you want to leave off at. 
+you'll probably want to build the appropriate corpuses by starting at small max sizes ƒor a short amount of time,
+then move up by powers of two until you reach the size you want to leave off at.
 This helps the fuzzer build a more compact corpus which leads to greater fuzzing efficiency (and that multiplies out over a long period of time)
+
+You can find the reference for the dictionary format in the libFuzzer documentation: https://llvm.org/docs/LibFuzzer.html#dictionaries
 
 ```sh
 # running fuzz on the `trie` target (from the project root). 
@@ -61,8 +63,11 @@ cargo +nightly fuzz run trie -- -dict=fuzz/dicts/trie -max_total_time=0 -max_len
 # see above for descriptions of arguments.
 cargo +nightly fuzz run rumqtt_proto_v4 -- -dict=fuzz/dicts/rumqtt_proto_v4
 
-
 # fuzz rumqtt protocol v5 parsing.
 # see above for descriptions of arguments.
 cargo +nightly fuzz run rumqtt_proto_v5 -- -dict=fuzz/dicts/rumqtt_proto_v5
+
+# fuzz `ClientId` parsing
+# see above for descriptions of arguments.
+cargo +nightly fuzz run client_id -- -dict=fuzz/dicts/client_id
 ```

@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use color_eyre::eyre::{self, Context};
+use rand::RngCore;
 use slotmap::SlotMap;
 use tashi_collections::{hash_map, HashMap};
 use tashi_consensus_engine::{MessageStream, Platform};
@@ -16,7 +17,7 @@ use connection::Connection;
 use crate::config::users::UsersConfig;
 use crate::mqtt::router::{system_publish, MqttRouter, RouterHandle};
 use crate::mqtt::session::{InactiveSessions, SessionStore};
-use crate::mqtt::{ClientId, ClientIndex, ConnectionId};
+use crate::mqtt::{client_id, ClientId, ClientIndex, ConnectionId};
 use crate::password::PasswordHashingPool;
 
 mod connection;
@@ -92,13 +93,14 @@ enum BrokerEvent {
     /// session, i.e. the clean session flag isn't set on connect.
     ConnectionAccepted {
         connection_id: ConnectionId,
-        client_id: ClientId,
+        client_id: Option<ClientId>,
         clean_session: bool,
         response_tx: oneshot::Sender<ConnectionAcceptedResponse>,
     },
 }
 
 struct ConnectionAcceptedResponse {
+    assigned_client_id: Option<ClientId>,
     client_index: ClientIndex,
     session: Option<SessionStore>,
 }
@@ -113,7 +115,7 @@ struct Shared {
 
 struct ConnectionData {
     id: ConnectionId,
-    client_id: ClientId,
+    client_id: Option<ClientId>,
     client_index: Option<ClientIndex>,
     store: SessionStore,
 }
@@ -227,6 +229,14 @@ impl MqttBroker {
                 clean_session,
                 response_tx,
             } => {
+                let (client_id, assigned_client_id, client_index) = match client_id {
+                    Some(client_id) => (client_id, None, self.clients.get_or_insert(client_id)),
+                    None => {
+                        let (client_id, client_index) = self.clients.insert_new_unique_id();
+                        (client_id, Some(client_id), client_index)
+                    }
+                };
+
                 let session = match (clean_session, self.inactive_sessions.claim(&client_id)) {
                     (false, Some(mut store)) => {
                         if let Some(_last_will) = store.session.last_will.take() {
@@ -234,39 +244,38 @@ impl MqttBroker {
                             // TODO: submit it
                         }
 
-                        tracing::trace!(client_id, "existing session was resumed");
+                        tracing::trace!(%client_id, "existing session was resumed");
                         Some(store)
                     }
                     (false, None) => {
                         tracing::trace!(
-                            client_id,
+                            %client_id,
                             "client requested to resume session, none was found"
                         );
                         None
                     }
                     (true, Some(_)) => {
-                        tracing::trace!(client_id, "existing session was dropped");
+                        tracing::trace!(%client_id, "existing session was dropped");
                         None
                     }
                     (true, None) => {
-                        tracing::trace!(client_id, "starting clean session");
+                        tracing::trace!(%client_id, "starting clean session");
                         None
                     }
                 };
-
-                let client_index = self.clients.get_or_insert(client_id.clone());
 
                 if let Some(replaced_connection) = self.clients.by_index[client_index]
                     .connection_id
                     .replace(connection_id)
                 {
                     // TODO: close replaced connection and wait for session to be released [TG-440]
-                    tracing::warn!(client_id, "leaking replaced connection for client ID");
+                    tracing::warn!(%client_id, "leaking replaced connection for client ID");
                     self.connections.remove(replaced_connection);
                 }
 
                 // The client might have disconnected, closing the channel.
                 if let Err(response) = response_tx.send(ConnectionAcceptedResponse {
+                    assigned_client_id,
                     client_index,
                     session,
                 }) {
@@ -331,8 +340,6 @@ impl Clients {
         match self.by_id.entry(id) {
             hash_map::Entry::Occupied(occupied) => *occupied.get(),
             hash_map::Entry::Vacant(vacant) => self.by_index.insert_with_key(move |index| {
-                // No real getting around this, `.entry_ref()` clones anyway.
-                let id = vacant.key().clone();
                 vacant.insert(index);
 
                 ClientState {
@@ -341,6 +348,83 @@ impl Clients {
                 }
             }),
         }
+    }
+
+    /// Generate, insert and return a random `ClientId` that is known not to be in-use by this broker.
+    fn insert_new_unique_id(&mut self) -> (ClientId, ClientIndex) {
+        let mut rng = rand::thread_rng();
+
+        // A collision is unlikely if `ThreadRng` has good entropy,
+        // but may be possible if this is a VM that just booted.
+        //
+        // It could also happen to be a random collision.
+        // Let's do some math on the odds of that happening:
+        // 64 allowed characters (0-9, A-Z, a-z, -, _) times a length of 23
+        // gives us 64^23 = 2^(6*23) = 2^138 possible client IDs, or 138 bits of entropy.
+        //
+        // If we plug that into the formula given here:
+        // https://en.wikipedia.org/wiki/Birthday_attack#Mathematics
+        // For a 1 in a million probability of collision,
+        // we need to generate approximately 834 quadrillion client IDs.
+        //
+        // However, if we only generated 16 character client IDs, equaling 96 bits of entropy,
+        // that drops to "just" 398 billion.
+        //
+        // Either way, we should keep trying (at least for a reasonable amount of time)
+        // if the first ID we generate collides with an existing one.
+        for i in 0..=1000 {
+            if [10, 100, 200, 500, 1000].contains(&i) {
+                // This is unlikely enough that we should yell about it.
+                tracing::warn!(
+                    known_client_ids = self.by_id.len(),
+                    "failed to generate an unused client ID after {i} attempts"
+                );
+
+                // `ThreadRng` reseeds from the OS every 64 KiB,
+                // so read at least that much to force a reseed.
+                //
+                // We could duplicate the reseeding behavior with more control if we used
+                // `ReseedingRng<StdRng, OsRng>` but that's missing fork detection.
+                //
+                // Using `ThreadRng` also helps to obscure the output
+                // because it's used by a bunch of other things,
+                // so even if some statistical correlation is possible to find in its output,
+                // just looking at generated client IDs is probably not enough information.
+                //
+                // *And*, if the broker task gets moved to another thread,
+                // that gives us a new RNG with, most likely, a completely different seed.
+                let mut buf = vec![0u8; 1024 * 64];
+                rng.fill_bytes(&mut buf);
+            }
+
+            // There's no real reason not to generate a full-length ID since it wouldn't save memory
+            // on our end either way, and it's only sent once or twice over the wire, so it wouldn't
+            // save bandwidth either.
+            //
+            // We can increase the number of possible client IDs by randomizing the _length_ of IDs,
+            // but that doesn't even double the size of the search space.
+            let client_id = ClientId::generate(&mut rng, client_id::MAX_LEN);
+
+            if let hash_map::Entry::Vacant(vacant) = self.by_id.entry(client_id) {
+                // 99.9999% of the time, this is going to be the happy path.
+                let client_index = self.by_index.insert_with_key(move |index| {
+                    vacant.insert(index);
+
+                    ClientState {
+                        id: client_id,
+                        connection_id: None,
+                    }
+                });
+
+                return (client_id, client_index);
+            }
+
+            tracing::trace!(%client_id, "generated a client ID that is already known");
+        }
+
+        // We failed to generate a unique client ID after 1000 attempts and *at least* 5 reseedings.
+        // It's probably better to die than loop forever at this point.
+        panic!("thread_rng() is broken")
     }
 
     fn remove(&mut self, index: ClientIndex) -> Option<ClientState> {
@@ -360,12 +444,16 @@ fn handle_connection_lost(inactive_sessions: &mut InactiveSessions, data: Connec
         ..
     } = data;
 
-    tracing::trace!(client_id, "connection lost");
+    let Some(client_id) = client_id else {
+        return;
+    };
+
+    tracing::trace!(%client_id, "connection lost");
 
     if session.expiry.should_save() {
-        tracing::trace!(client_id, "session saved");
+        tracing::trace!(%client_id, "session saved");
         inactive_sessions.insert(client_id, session);
     } else {
-        tracing::trace!(client_id, "session expired");
+        tracing::trace!(%client_id, "session expired");
     }
 }

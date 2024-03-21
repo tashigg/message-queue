@@ -7,6 +7,8 @@
 pub use rumqttd_protocol as protocol;
 
 pub mod broker;
+pub mod client_id;
+
 mod session;
 pub mod trie;
 
@@ -18,8 +20,7 @@ mod router;
 
 mod packets;
 
-// It's a String to match rumqtt's type, but it could be [u8; 23] if we wanted.
-type ClientId = String;
+pub use client_id::ClientId;
 
 slotmap::new_key_type! {
     struct ConnectionId;
