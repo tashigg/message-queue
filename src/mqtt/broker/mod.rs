@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use color_eyre::eyre::{self, Context};
+use futures::future::OptionFuture;
 use rand::RngCore;
 use slotmap::SlotMap;
 use tashi_collections::{hash_map, HashMap};
@@ -10,6 +11,7 @@ use tashi_consensus_engine::{MessageStream, Platform};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
+use tokio_rustls::rustls::{Certificate, PrivateKey};
 use tokio_util::sync::CancellationToken;
 
 use connection::Connection;
@@ -55,10 +57,16 @@ const TOPIC_MAX_LENGTH: usize = 1024;
 // TODO: make this configurable
 const TOPIC_ALIAS_MAX: u16 = 100;
 
+struct BrokerTls {
+    acceptor: tokio_rustls::TlsAcceptor,
+    listener: TcpListener,
+}
+
 pub struct MqttBroker {
     listen_addr: SocketAddr,
 
     listener: TcpListener,
+    tls: Option<BrokerTls>,
 
     token: CancellationToken,
 
@@ -120,9 +128,16 @@ struct ConnectionData {
     store: SessionStore,
 }
 
+pub struct TlsConfig {
+    pub socket_addr: SocketAddr,
+    pub cert: Vec<Certificate>,
+    pub key: PrivateKey,
+}
+
 impl MqttBroker {
     pub async fn bind(
         listen_addr: SocketAddr,
+        tls_config: Option<TlsConfig>,
         users: UsersConfig,
         tce_platform: Arc<Platform>,
         tce_messages: MessageStream,
@@ -130,6 +145,30 @@ impl MqttBroker {
         let listener = TcpListener::bind(listen_addr)
             .await
             .wrap_err_with(|| format!("failed to bind listen_addr: {}", listen_addr))?;
+
+        let tls = match tls_config {
+            Some(tls_config) => {
+                let listen_addr = tls_config.socket_addr;
+                let tls_acceptor = {
+                    let config = tokio_rustls::rustls::ServerConfig::builder()
+                        .with_safe_defaults()
+                        .with_no_client_auth()
+                        .with_single_cert(tls_config.cert, tls_config.key)?;
+
+                    tokio_rustls::TlsAcceptor::from(Arc::new(config))
+                };
+
+                let tls_listener = TcpListener::bind(listen_addr)
+                    .await
+                    .wrap_err_with(|| format!("failed to bind listen_addr: {}", listen_addr))?;
+
+                Some(BrokerTls {
+                    acceptor: tls_acceptor,
+                    listener: tls_listener,
+                })
+            }
+            None => None,
+        };
 
         let (broker_tx, broker_rx) = mpsc::channel(100);
 
@@ -140,6 +179,7 @@ impl MqttBroker {
         Ok(MqttBroker {
             listen_addr,
             listener,
+            tls,
             token,
             clients: Default::default(),
             connections: SlotMap::with_capacity_and_key(256),
@@ -165,6 +205,9 @@ impl MqttBroker {
         let mut shutdown = false;
 
         while !shutdown {
+            let tls_listner_fut =
+                OptionFuture::from(self.tls.as_ref().map(|it| it.listener.accept()));
+
             tokio::select! {
                 _ = self.token.cancelled() => {
                     shutdown = true;
@@ -179,6 +222,9 @@ impl MqttBroker {
                 }
                 res = self.listener.accept() => {
                     self.handle_accept(res);
+                }
+                Some(res) = tls_listner_fut => {
+                    self.handle_tls_accept(res).await;
                 }
                 Some(event) = self.broker_rx.recv() => {
                     self.handle_event(event).await;
@@ -203,6 +249,38 @@ impl MqttBroker {
         match result {
             Ok((stream, remote_addr)) => {
                 tracing::info!(%remote_addr, "connection received");
+
+                let connection_id = self.connections.insert(());
+
+                let conn = Connection::new(
+                    connection_id,
+                    stream,
+                    remote_addr,
+                    self.token.clone(),
+                    self.shared.clone(),
+                );
+
+                self.tasks.spawn(conn.run());
+            }
+            // TODO: Some kinds of accept failures are probably fatal
+            Err(e) => tracing::error!(?e, "accept failed"),
+        }
+    }
+
+    async fn handle_tls_accept(&mut self, result: std::io::Result<(TcpStream, SocketAddr)>) {
+        match result {
+            Ok((stream, remote_addr)) => {
+                tracing::info!(%remote_addr, "connection received");
+
+                let stream = self
+                    .tls
+                    .as_ref()
+                    .unwrap()
+                    .acceptor
+                    .accept(stream)
+                    .await
+                    .map_err(|_| todo!())
+                    .unwrap();
 
                 let connection_id = self.connections.insert(());
 

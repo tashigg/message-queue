@@ -13,11 +13,11 @@ default-run = "tashi-message-queue"
 
 [dependencies.tashi-consensus-engine]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "a87e2453ffca6fd2fdc200b895edfc0c69f1810a"
+rev = "7f6f9fce11fbaa16902c3f03524c2bad981d6e3d"
 
 [dependencies.tashi-collections]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "a87e2453ffca6fd2fdc200b895edfc0c69f1810a"
+rev = "7f6f9fce11fbaa16902c3f03524c2bad981d6e3d"
 
 [dependencies]
 argon2 = { version = "0.5.3", features = ["std"] }
@@ -39,6 +39,7 @@ der = { version = "0.7.8", features = ["derive"] }
 futures = { version = "0.3.30", features = ["std", "alloc"] }
 slotmap = "1.0.7"
 arbitrary = { version = "1", optional = true, features = ["derive"] }
+tokio-rustls = "0.24.1"
 
 [dependencies.clap]
 version = "4.5.0"

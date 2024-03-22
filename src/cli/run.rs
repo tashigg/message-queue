@@ -2,6 +2,7 @@ use color_eyre::eyre;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use color_eyre::eyre::Context;
 use tashi_consensus_engine::sync::quic::QuicSocket;
@@ -11,7 +12,7 @@ use crate::cli::LogFormat;
 use crate::config;
 use crate::config::addresses::Addresses;
 use crate::config::users::{AuthConfig, UsersConfig};
-use crate::mqtt::broker::MqttBroker;
+use crate::mqtt::broker::{self, MqttBroker};
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct RunArgs {
@@ -30,6 +31,9 @@ pub struct RunArgs {
     #[command(flatten)]
     pub secret_key: SecretKeyOpt,
 
+    #[command(flatten)]
+    pub tls_config: Option<TlsConfig>,
+
     #[clap(default_value = "dmq/")]
     pub config_dir: PathBuf,
 }
@@ -44,6 +48,16 @@ pub struct SecretKeyOpt {
     /// Read a P-256 secret key from a PEM-encoded file.
     #[clap(short = 'f', long, env)]
     pub secret_key_file: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct TlsConfig {
+    #[clap(long, default_value = "0.0.0.0:8883", required = false)]
+    pub mqtt_tls_listen_addr: SocketAddr,
+    #[clap(long, required = false)]
+    pub dns_name: String,
+    #[clap(long, required = false)]
+    pub tls_secret_key: String,
 }
 
 impl SecretKeyOpt {
@@ -114,8 +128,37 @@ async fn main_async(
 
     let tce_platform = Arc::new(tce_platform);
 
+    let tls_config = args
+        .tls_config
+        .map(|tls_config| {
+            let tls_socket_addr = tls_config.mqtt_tls_listen_addr;
+            let key = SecretKeyOpt {
+                secret_key: Some(tls_config.tls_secret_key),
+                secret_key_file: None,
+            }
+            .read_key()?;
+            let cert = tashi_consensus_engine::Certificate::generate_self_signed(
+                &key,
+                tls_socket_addr,
+                &tls_config.dns_name,
+                None,
+            )?;
+
+            let cert = cert.into_rustls();
+
+            std::fs::write("cert.der", cert.0.as_slice())?;
+
+            eyre::Ok(broker::TlsConfig {
+                socket_addr: tls_socket_addr,
+                cert: Vec::from([cert]),
+                key: key.to_rustls()?,
+            })
+        })
+        .transpose()?;
+
     let mut broker = MqttBroker::bind(
         args.mqtt_listen_addr,
+        tls_config,
         users,
         tce_platform.clone(),
         tce_message_stream,

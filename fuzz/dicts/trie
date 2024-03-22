@@ -2,3 +2,5 @@
 kwPound="#"
 kwPlus="+"
 kwSlash="/"
+wildOneLevel="/+"
+wildMultiLevel="/#"
