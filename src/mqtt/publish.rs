@@ -1,14 +1,17 @@
+use bytes::Bytes;
 use std::ops::Not;
 
 use tashi_collections::FnvHashMap;
 
 use protocol::{
     DisconnectReasonCode, Packet, PubAck, PubAckProperties, PubAckReason, PubRec, PubRecProperties,
-    PubRecReason, Publish, PublishProperties,
+    PubRecReason, Publish, PublishProperties, QoS,
 };
 use rumqttd_protocol as protocol;
 use tce_message::PublishTrasaction;
 
+use crate::mqtt::packets::PacketId;
+use crate::mqtt::router::SubscriptionId;
 use crate::mqtt::MAX_STRING_LEN;
 use crate::tce_message;
 use crate::tce_message::{
@@ -254,4 +257,46 @@ pub fn validate_and_convert(
         timestamp_received: TimestampSeconds::now(),
         properties,
     })
+}
+
+pub fn txn_to_packet(
+    txn: &PublishTrasaction,
+    duplicated: bool,
+    qos: QoS,
+    packet_id: Option<PacketId>,
+    sub_ids: &[SubscriptionId],
+) -> Packet {
+    Packet::Publish(
+        Publish::with_all(
+            duplicated,
+            qos,
+            PacketId::opt_to_raw(packet_id),
+            false,
+            Bytes::copy_from_slice(txn.topic.as_bytes()),
+            txn.payload.0.clone(),
+        ),
+        (!sub_ids.is_empty() || txn.properties.is_some()).then(|| {
+            macro_rules! clone_prop {
+                ($prop:ident) => {
+                    txn.properties
+                        .as_ref()
+                        .and_then(|props| props.$prop.clone())
+                };
+            }
+
+            PublishProperties {
+                payload_format_indicator: clone_prop!(payload_format_indicator),
+                message_expiry_interval: clone_prop!(message_expiry_interval),
+                topic_alias: None,
+                response_topic: clone_prop!(response_topic),
+                correlation_data: clone_prop!(correlation_data).map(|bytes| bytes.0),
+                user_properties: clone_prop!(user_properties).map_or(vec![], |props| props.0),
+
+                // TODO: now that `rumqttd-protocol` is in-tree, just change the type there
+                subscription_identifiers: sub_ids.iter().copied().map(Into::into).collect(),
+
+                content_type: clone_prop!(content_type),
+            }
+        }),
+    )
 }

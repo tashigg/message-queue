@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre::{self, Context};
 use slotmap::SlotMap;
+use tashi_collections::{hash_map, HashMap};
 use tashi_consensus_engine::{MessageStream, Platform};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
@@ -14,8 +15,8 @@ use connection::Connection;
 
 use crate::config::users::UsersConfig;
 use crate::mqtt::router::{system_publish, MqttRouter, RouterHandle};
-use crate::mqtt::session::{InactiveSessions, Session};
-use crate::mqtt::{ClientId, ConnectionId};
+use crate::mqtt::session::{InactiveSessions, SessionStore};
+use crate::mqtt::{ClientId, ClientIndex, ConnectionId};
 use crate::password::PasswordHashingPool;
 
 mod connection;
@@ -60,6 +61,8 @@ pub struct MqttBroker {
 
     token: CancellationToken,
 
+    clients: Clients,
+
     /// Generator for `ConnectionId`s
     connections: SlotMap<ConnectionId, ()>,
     tasks: JoinSet<ConnectionData>,
@@ -73,10 +76,31 @@ pub struct MqttBroker {
     router: MqttRouter,
 }
 
+#[derive(Default)]
+struct Clients {
+    by_id: HashMap<ClientId, ClientIndex>,
+    by_index: SlotMap<ClientIndex, ClientState>,
+}
+
+struct ClientState {
+    id: ClientId,
+    connection_id: Option<ConnectionId>,
+}
+
 enum BrokerEvent {
     /// The session sender must only be set if the client wants to resume their
     /// session, i.e. the clean session flag isn't set on connect.
-    ConnectionAccepted(ClientId, Option<oneshot::Sender<Option<Session>>>),
+    ConnectionAccepted {
+        connection_id: ConnectionId,
+        client_id: ClientId,
+        clean_session: bool,
+        response_tx: oneshot::Sender<ConnectionAcceptedResponse>,
+    },
+}
+
+struct ConnectionAcceptedResponse {
+    client_index: ClientIndex,
+    session: Option<SessionStore>,
 }
 
 struct Shared {
@@ -90,7 +114,8 @@ struct Shared {
 struct ConnectionData {
     id: ConnectionId,
     client_id: ClientId,
-    session: Session,
+    client_index: Option<ClientIndex>,
+    store: SessionStore,
 }
 
 impl MqttBroker {
@@ -114,6 +139,7 @@ impl MqttBroker {
             listen_addr,
             listener,
             token,
+            clients: Default::default(),
             connections: SlotMap::with_capacity_and_key(256),
             tasks: JoinSet::new(),
             shared: Arc::new(Shared {
@@ -142,7 +168,10 @@ impl MqttBroker {
                     shutdown = true;
                 }
                 Some(Ok(data)) = self.tasks.join_next() => {
-                    self.router.disconnected(data.id);
+                    if let Some(client_index) = data.client_index {
+                        self.router.disconnected(client_index, data.id);
+                    }
+
                     self.connections.remove(data.id);
                     handle_connection_lost(&mut self.inactive_sessions, data);
                 }
@@ -156,7 +185,12 @@ impl MqttBroker {
                     res.wrap_err("error from router task")?;
                     eyre::bail!("router task exited unexpectedly");
                 }
-                _ = self.inactive_sessions.process_expirations() => { }
+                Some(client_id) = self.inactive_sessions.next_expiration() => {
+                    if let Some(client_idx) = self.clients.index_from_id(&client_id) {
+                        self.router.evict_client(client_idx);
+                        self.clients.remove(client_idx);
+                    }
+                }
             }
         }
 
@@ -187,29 +221,71 @@ impl MqttBroker {
 
     async fn handle_event(&mut self, event: BrokerEvent) {
         match event {
-            BrokerEvent::ConnectionAccepted(client_id, session_tx) => {
-                match (session_tx, self.inactive_sessions.claim(&client_id)) {
-                    (Some(session_tx), Some(mut session)) => {
-                        if let Some(_last_will) = session.last_will.take() {
+            BrokerEvent::ConnectionAccepted {
+                connection_id,
+                client_id,
+                clean_session,
+                response_tx,
+            } => {
+                let session = match (clean_session, self.inactive_sessions.claim(&client_id)) {
+                    (false, Some(mut store)) => {
+                        if let Some(_last_will) = store.session.last_will.take() {
                             // TODO: last_will_properties
                             // TODO: submit it
                         }
 
-                        // The client might have disconnected, closing the channel.
-                        match session_tx.send(Some(session)) {
-                            Ok(()) => tracing::trace!(client_id, "existing session was resumed"),
-                            Err(maybe_session) => {
-                                if let Some(session) = maybe_session {
-                                    self.inactive_sessions.insert(client_id, session);
-                                }
-                            }
-                        }
+                        tracing::trace!(client_id, "existing session was resumed");
+                        Some(store)
                     }
-                    (Some(session_tx), None) => {
-                        let _ = session_tx.send(None);
+                    (false, None) => {
+                        tracing::trace!(
+                            client_id,
+                            "client requested to resume session, none was found"
+                        );
+                        None
                     }
-                    (None, Some(_)) => tracing::trace!(client_id, "existing session was dropped"),
-                    _ => {}
+                    (true, Some(_)) => {
+                        tracing::trace!(client_id, "existing session was dropped");
+                        None
+                    }
+                    (true, None) => {
+                        tracing::trace!(client_id, "starting clean session");
+                        None
+                    }
+                };
+
+                let client_index = self.clients.get_or_insert(client_id.clone());
+
+                if let Some(replaced_connection) = self.clients.by_index[client_index]
+                    .connection_id
+                    .replace(connection_id)
+                {
+                    // TODO: close replaced connection and wait for session to be released [TG-440]
+                    tracing::warn!(client_id, "leaking replaced connection for client ID");
+                    self.connections.remove(replaced_connection);
+                }
+
+                // The client might have disconnected, closing the channel.
+                if let Err(response) = response_tx.send(ConnectionAcceptedResponse {
+                    client_index,
+                    session,
+                }) {
+                    if let Some(store) = response.session {
+                        self.inactive_sessions.insert(client_id, store);
+                    } else {
+                        // Note: a malicious client could theoretically force the version for a slot
+                        // to wrap around by connecting and disconnecting a bunch of times.
+                        //
+                        // While `slotmap` handles this just fine, it could cause us
+                        // to leak information about another client that ended up in the same slot
+                        // if the version happens to wrap around to one referenced by an old key
+                        // somewhere.
+                        //
+                        // This is unlikely to be feasibly exploitable, however, as long as we
+                        // are sure to keep other maps using the same key in-sync. We can also
+                        // make this more difficult to manipulate by throttling connection attempts.
+                        self.clients.remove(client_index);
+                    }
                 }
             }
         }
@@ -236,16 +312,57 @@ impl MqttBroker {
     }
 }
 
+impl Clients {
+    fn index_from_id(&self, id: &str) -> Option<ClientIndex> {
+        self.by_id.get(id).cloned()
+    }
+
+    #[allow(dead_code)]
+    fn by_index(&self, index: ClientIndex) -> Option<&ClientState> {
+        self.by_index.get(index)
+    }
+
+    #[allow(dead_code)]
+    fn by_index_mut(&mut self, index: ClientIndex) -> Option<&mut ClientState> {
+        self.by_index.get_mut(index)
+    }
+
+    fn get_or_insert(&mut self, id: ClientId) -> ClientIndex {
+        match self.by_id.entry(id) {
+            hash_map::Entry::Occupied(occupied) => *occupied.get(),
+            hash_map::Entry::Vacant(vacant) => self.by_index.insert_with_key(move |index| {
+                // No real getting around this, `.entry_ref()` clones anyway.
+                let id = vacant.key().clone();
+                vacant.insert(index);
+
+                ClientState {
+                    id,
+                    connection_id: None,
+                }
+            }),
+        }
+    }
+
+    fn remove(&mut self, index: ClientIndex) -> Option<ClientState> {
+        let state = self.by_index.remove(index)?;
+        self.by_id.remove(&state.id);
+
+        Some(state)
+    }
+}
+
 // This is a free function because it would require a borrow of Broker while
 // listener is partially moved in shutdown.
 fn handle_connection_lost(inactive_sessions: &mut InactiveSessions, data: ConnectionData) {
     let ConnectionData {
-        client_id, session, ..
+        client_id,
+        store: session,
+        ..
     } = data;
 
     tracing::trace!(client_id, "connection lost");
 
-    if session.should_save() {
+    if session.expiry.should_save() {
         tracing::trace!(client_id, "session saved");
         inactive_sessions.insert(client_id, session);
     } else {

@@ -2,13 +2,13 @@ use std::num::NonZeroU16;
 
 use tashi_collections::HashMap;
 
-use rumqttd_protocol::{QoS, SubscribeReasonCode, UnsubAckReason};
+use rumqttd_protocol::{SubscribeReasonCode, UnsubAckReason};
 
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Debug)]
 pub struct PacketId(NonZeroU16);
 
 impl PacketId {
-    const ONE: PacketId = PacketId(NonZeroU16::MIN);
+    pub const START: PacketId = PacketId(NonZeroU16::MIN);
 
     pub fn new(id: u16) -> Option<PacketId> {
         NonZeroU16::new(id).map(Self)
@@ -23,7 +23,7 @@ impl PacketId {
     }
 
     /// Increment `self` or wrap around to 1, returning the previous value.
-    fn wrapping_increment(&mut self) -> Self {
+    pub fn wrapping_increment(&mut self) -> Self {
         let ret = *self;
         *self = PacketId(self.0.checked_add(1).unwrap_or(NonZeroU16::MIN));
         ret
@@ -79,26 +79,6 @@ pub enum RemovePacketError {
     },
 }
 
-#[derive(Debug)]
-pub struct OutgoingPackets {
-    // We generate packet IDs locally, but it's conceivable that a malicious client could manipulate
-    // this using a clever ordering of `PUBACKS` and `PUBLISH`es from a different connection.
-    publishes: HashMap<PacketId, OutgoingPublish>,
-    next_packet_id: PacketId,
-}
-
-#[derive(Debug)]
-pub struct OutgoingPublish {
-    pub qos: QoS,
-}
-
-#[derive(thiserror::Error, Debug)]
-#[error("packet ID {} ({qos:?}) never acknowledged", self.packet_id.get())]
-pub struct InsertPublishError {
-    pub packet_id: PacketId,
-    pub qos: QoS,
-}
-
 macro_rules! remove_packet {
     ($this:expr, $packet_id:ident, $pattern:pat => $extract:ident) => {
         match $this.packets.remove(&$packet_id) {
@@ -140,6 +120,10 @@ impl IncomingPacketSet {
         self.insert(packet_id, IncomingPacketKind::Unsub(unsub))
     }
 
+    pub fn insert_pub(&mut self, packet_id: PacketId) -> Result<(), ReplacedPacketError> {
+        self.insert(packet_id, IncomingPacketKind::Pub(IncomingPub {}))
+    }
+
     fn insert(
         &mut self,
         packet_id: PacketId,
@@ -166,52 +150,7 @@ impl IncomingPacketSet {
         remove_packet!(self, packet_id, IncomingPacketKind::Unsub(unsub) => unsub)
     }
 
-    // TODO: other packet kinds
-}
-
-#[allow(dead_code)]
-impl OutgoingPackets {
-    pub fn new() -> Self {
-        OutgoingPackets {
-            publishes: HashMap::default(),
-            // RFC: MQTT.js starts at a random offset and then increments, but it's not clear why:
-            // https://github.com/mqttjs/MQTT.js/blob/2b751861f2af7b914c3eb84265fb8474428045ec/src/lib/default-message-id-provider.ts#L49
-            //
-            // The linked issue is just them forgetting to ensure `nextId` is at least 1.
-            next_packet_id: PacketId::ONE,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.publishes.len()
-    }
-
-    pub fn insert_publish(&mut self, qos: QoS) -> Result<PacketId, InsertPublishError> {
-        use tashi_collections::hash_map;
-
-        assert_ne!(
-            qos,
-            QoS::AtMostOnce,
-            "QoS 0 PUBLISHes cannot be assigned a packet ID"
-        );
-
-        let packet_id = self.next_packet_id.wrapping_increment();
-
-        match self.publishes.entry(packet_id) {
-            hash_map::Entry::Vacant(vacant) => {
-                vacant.insert(OutgoingPublish { qos });
-                Ok(packet_id)
-            }
-            // If we wrapped around and the client still hasn't ack'd a packet,
-            // treat it as a logic error.
-            hash_map::Entry::Occupied(occupied) => Err(InsertPublishError {
-                packet_id,
-                qos: occupied.get().qos,
-            }),
-        }
-    }
-
-    pub fn ack_publish(&mut self, packet_id: PacketId) -> Option<OutgoingPublish> {
-        self.publishes.remove(&packet_id)
+    pub fn remove_pub(&mut self, packet_id: PacketId) -> Result<IncomingPub, RemovePacketError> {
+        remove_packet!(self, packet_id, IncomingPacketKind::Pub(p) => p)
     }
 }

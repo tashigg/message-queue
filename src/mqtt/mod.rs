@@ -10,6 +10,8 @@ pub mod broker;
 mod session;
 pub mod trie;
 
+mod mailbox;
+
 mod publish;
 
 mod router;
@@ -19,7 +21,12 @@ mod packets;
 // It's a String to match rumqtt's type, but it could be [u8; 23] if we wanted.
 type ClientId = String;
 
-slotmap::new_key_type! { struct ConnectionId; }
+slotmap::new_key_type! {
+    struct ConnectionId;
+
+    /// `SlotMap` key for known clients.
+    struct ClientIndex;
+}
 
 /// Max length of a UTF-8 string allowed by the MQTT spec.
 ///
