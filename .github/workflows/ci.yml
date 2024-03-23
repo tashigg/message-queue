@@ -23,6 +23,7 @@ on:
 
 jobs:
   tmq-format:
+    name: Format
     runs-on: tashi-arc
     timeout-minutes: 10
     steps:
@@ -43,6 +44,7 @@ jobs:
           args: --check --all
 
   tmq-check:
+    name: Check
     runs-on: tashi-arc
     timeout-minutes: 10
     steps:
@@ -81,7 +83,42 @@ jobs:
           command: clippy
           args: --all-targets -- -D warnings
 
-  tmq-tests:
+  tmq-tests-unit:
+    name: Unit Tests
+    runs-on: tashi-arc
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+
+      - name: Add TCE Deploy Key
+        run: |
+          mkdir -p ~/.ssh
+          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          chmod 400 ~/.ssh/id_ed25519
+          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Unit Tests
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --lib
+
+  # Future note: add integration tests as their own pass.
+
+  tmq-tests-e2e:
+    name: End-to-End Tests
     timeout-minutes: 10
     runs-on: tashi-arc-dind
     env:
