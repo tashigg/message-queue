@@ -19,14 +19,12 @@ pub(crate) struct InactiveSessions {
 impl InactiveSessions {
     pub fn insert(&mut self, client_id: ClientId, session: SessionStore) {
         let expiry_key = if let SessionExpiry::AfterConnectionClosed(duration) = session.expiry {
-            Some(self.expirations.insert(client_id.clone(), duration))
+            Some(self.expirations.insert(client_id, duration))
         } else {
             None
         };
 
-        let old_session = self
-            .sessions
-            .insert(client_id.clone(), (session, expiry_key));
+        let old_session = self.sessions.insert(client_id, (session, expiry_key));
 
         assert!(old_session.is_none());
     }
@@ -46,7 +44,7 @@ impl InactiveSessions {
     pub async fn next_expiration(&mut self) -> Option<ClientId> {
         let client_id = self.expirations.next().await?.into_inner();
         self.sessions.remove(&client_id);
-        tracing::trace!(client_id, "session expired");
+        tracing::trace!(%client_id, "session expired");
         Some(client_id)
     }
 }

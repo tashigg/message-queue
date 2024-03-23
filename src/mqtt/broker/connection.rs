@@ -4,7 +4,7 @@ use crate::mqtt::publish::ValidateError;
 use crate::mqtt::router::{FilterProperties, RouterConnection, RouterMessage, SubscriptionId};
 use crate::mqtt::session::{Session, SessionStore};
 use crate::mqtt::trie::Filter;
-use crate::mqtt::{publish, ClientIndex, ConnectionId};
+use crate::mqtt::{client_id, publish, ClientId, ClientIndex, ConnectionId};
 use crate::tce_message::{Transaction, TransactionData};
 use bytes::BytesMut;
 
@@ -16,11 +16,11 @@ use protocol::{
     Publish, PublishProperties, QoS, SubAck, Subscribe, SubscribeProperties, SubscribeReasonCode,
     UnsubAck, UnsubAckReason, Unsubscribe,
 };
-use rand::distributions::{Alphanumeric, DistString};
 use rumqttd_protocol as protocol;
 use rumqttd_protocol::{PubComp, PubCompReason, PubRel, PubRelReason};
 use std::fmt::Display;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::{cmp, io, iter};
 use tashi_collections::FnvHashMap;
@@ -39,7 +39,7 @@ pub struct Connection {
 
     remote_addr: SocketAddr,
 
-    client_id: String,
+    client_id: Option<ClientId>,
     client_index: Option<ClientIndex>,
 
     protocol: protocol::v5::V5,
@@ -114,7 +114,7 @@ impl Connection {
         Connection {
             id,
             remote_addr,
-            client_id: String::new(),
+            client_id: None,
             client_index: None,
             protocol: protocol::v5::V5,
             stream,
@@ -166,18 +166,19 @@ impl Connection {
             return Ok(());
         };
 
-        let Some(router) = self.handle_connect_packet(store, &packet).await? else {
+        let Some((client_id, router)) = self.handle_connect_packet(store, &packet).await? else {
             tracing::info!("Router channel closed; exiting.");
             return Ok(());
         };
 
-        self.run_session(store, router).await
+        self.run_session(client_id, store, router).await
     }
 
     // Instrument with client ID once we have one assigned.
-    #[tracing::instrument(skip_all, fields(client_id=self.client_id))]
+    #[tracing::instrument(skip_all, fields(%client_id))]
     async fn run_session(
         &mut self,
+        client_id: ClientId,
         store: &mut SessionStore,
         mut router: RouterConnection,
     ) -> crate::Result<()> {
@@ -407,7 +408,7 @@ impl Connection {
         &mut self,
         store: &mut SessionStore,
         packet: &Packet,
-    ) -> crate::Result<Option<RouterConnection>> {
+    ) -> crate::Result<Option<(ClientId, RouterConnection)>> {
         let Packet::Connect(connect, connect_properties, last_will, last_will_properties, login) =
             packet
         else {
@@ -425,13 +426,17 @@ impl Connection {
         // TODO: disallow zero keep alive
 
         // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901059
-        let mut assigned_client_id = None;
-        self.client_id = if !connect.client_id.is_empty() {
-            connect.client_id.clone()
-        } else {
-            let client_id = Alphanumeric.sample_string(&mut rand::thread_rng(), 23);
-            assigned_client_id = Some(client_id.clone());
-            client_id
+        let client_id = match ClientId::from_str(&connect.client_id) {
+            Ok(client_id) => Some(client_id),
+            Err(client_id::ParseError::Empty) => {
+                // Let the broker assign a client ID.
+                None
+            }
+            Err(e) => {
+                self.disconnect_on_connect_error(ConnectReturnCode::ClientIdentifierNotValid, e)
+                    .await?;
+                return Ok(None);
+            }
         };
 
         if let Some(login) = login {
@@ -468,13 +473,15 @@ impl Connection {
         }
 
         // An empty client ID in the CONNECT does *not* imply a clean start.
+        // There shouldn't be an existing session,
+        // but we must retain session state after disconnect.
         let clean_session = /* assigned_client_id.is_some() || */ connect.clean_session;
 
         let (response_tx, response_rx) = oneshot::channel();
 
         self.send_to_broker(BrokerEvent::ConnectionAccepted {
             connection_id: self.id,
-            client_id: self.client_id.clone(),
+            client_id,
             clean_session,
             response_tx,
         })
@@ -482,18 +489,17 @@ impl Connection {
 
         let response = response_rx.await?;
 
+        let client_id = client_id
+            .or(response.assigned_client_id)
+            .expect("BUG: broker should have assigned a client ID if the client didn't");
+
+        self.client_id = Some(client_id);
+        self.client_index = Some(response.client_index);
+
         let session_present = if let Some(existing_session) = response.session {
             *store = existing_session;
             true
         } else {
-            if !clean_session {
-                // It might have expired.
-                tracing::debug!(
-                    self.client_id,
-                    "expected a session, but it wasn't available"
-                );
-            }
-
             false
         };
 
@@ -518,7 +524,7 @@ impl Connection {
             .connected(
                 self.id,
                 response.client_index,
-                self.client_id.clone(),
+                client_id,
                 store.mailbox.sender(),
                 clean_session,
             )
@@ -530,7 +536,7 @@ impl Connection {
                 code: ConnectReturnCode::Success,
             },
             Some(ConnAckProperties {
-                assigned_client_identifier: assigned_client_id,
+                assigned_client_identifier: response.assigned_client_id.map(Into::into),
                 // A value is 0 means that Wildcard Subscriptions are not supported.
                 // A value of 1 means Wildcard Subscriptions are supported.
                 // If not present, then Wildcard Subscriptions are supported.
@@ -551,7 +557,7 @@ impl Connection {
         ))
         .await?;
 
-        Ok(Some(router))
+        Ok(Some((client_id, router)))
     }
 
     async fn handle_publish(
@@ -934,7 +940,7 @@ impl Connection {
     async fn disconnect_on_connect_error(
         &mut self,
         code: ConnectReturnCode,
-        reason: impl Display + Into<String>,
+        reason: impl Display,
     ) -> crate::Result<()> {
         // The MQTT spec actually recommends not responding if anything goes wrong with
         // CONNECT handling, as it could accidentally advertise the presence of an MQTT server
@@ -953,7 +959,7 @@ impl Connection {
                     code,
                 },
                 Some(ConnAckProperties {
-                    reason_string: Some(reason.into()),
+                    reason_string: Some(reason.to_string()),
                     ..Default::default()
                 }),
             ))

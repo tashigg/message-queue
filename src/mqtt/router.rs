@@ -813,7 +813,7 @@ fn dispatch(state: &mut RouterState, publish: PublishTrasaction, origin: Publish
 
             let _span = tracing::info_span!(
                 "match",
-                client_id = state.clients[client_idx].client_id,
+                client_id = %state.clients[client_idx].client_id,
                 topic = publish.topic
             )
             .entered();

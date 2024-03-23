@@ -41,3 +41,10 @@ path = "fuzz_targets/rumqtt_proto_v4.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "client_id"
+path = "fuzz_targets/client_id.rs"
+test = false
+doc = false
+bench = false
