@@ -42,6 +42,10 @@ impl InactiveSessions {
         }
     }
 
+    pub fn is_expirations_empty(&self) -> bool {
+        self.expirations.is_empty()
+    }
+
     pub async fn process_expirations(&mut self) {
         while let Some(client_id) = self.expirations.next().await {
             let client_id = client_id.get_ref();

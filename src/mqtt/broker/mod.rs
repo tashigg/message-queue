@@ -156,7 +156,7 @@ impl MqttBroker {
                     res.wrap_err("error from router task")?;
                     eyre::bail!("router task exited unexpectedly");
                 }
-                _ = self.inactive_sessions.process_expirations() => { }
+                _ = self.inactive_sessions.process_expirations(), if !self.inactive_sessions.is_expirations_empty() => { }
             }
         }
 
