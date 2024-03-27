@@ -472,6 +472,30 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             return Ok(None);
         }
 
+        // we have to check the `last_will` for validity (if it even exists).
+        // fixme: this is kinda a hacky way of doing this. It'd probably be ideal to not use `publish` for this, but it mostly makes sense to do so.
+
+        store.session.last_will = match last_will
+            .as_ref()
+            .map(|it| publish::validate_and_convert_last_will(it, last_will_properties.as_ref()))
+            .transpose()
+        {
+            Ok(value) => value,
+            Err(ValidateError::Disconnect(err)) => {
+                self.disconnect_on_connect_error(err.reason.into_connack_reason(), err.message)
+                    .await?;
+                return Ok(None);
+            }
+            Err(ValidateError::Reject(err)) => {
+                self.disconnect_on_connect_error(
+                    err.reason.into_connack_reason(),
+                    err.message.unwrap_or_else(String::new),
+                )
+                .await?;
+                return Ok(None);
+            }
+        };
+
         // An empty client ID in the CONNECT does *not* imply a clean start.
         // There shouldn't be an existing session,
         // but we must retain session state after disconnect.
@@ -511,9 +535,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                     cmp::min(self.client_receive_maximum, receive_maximum);
             }
         }
-
-        store.session.last_will = last_will.clone();
-        store.session.last_will_properties = last_will_properties.clone();
 
         // TODO: don't enable this for v4
         store.mailbox.coalesce_deliveries(true);
@@ -625,8 +646,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             Ok(transaction) => Transaction {
                 data: TransactionData::Publish(transaction),
             },
-            Err(ValidateError::Disconnect { reason, message }) => {
-                return self.disconnect(reason, message).await;
+            Err(ValidateError::Disconnect(disconnect)) => {
+                return self
+                    .disconnect(
+                        disconnect.reason.into_disconnect_reason(),
+                        disconnect.message,
+                    )
+                    .await;
             }
             Err(ValidateError::Reject(reject)) => {
                 match qos {

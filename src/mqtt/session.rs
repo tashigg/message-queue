@@ -1,7 +1,8 @@
 use crate::mqtt::mailbox::Mailbox;
 use crate::mqtt::ClientId;
+use crate::tce_message::PublishTrasaction;
 use futures::StreamExt;
-use rumqttd_protocol::{LastWill, LastWillProperties};
+use std::num::NonZeroU32;
 use std::time::Duration;
 use tashi_collections::HashMap;
 use tokio_util::time::DelayQueue;
@@ -86,14 +87,22 @@ impl From<SessionExpiry> for Option<u32> {
     }
 }
 
+pub(crate) struct Will {
+    pub delay: Option<NonZeroU32>,
+    // Note: We have to eagerly construct this, but the `timestamp_recieved` is actually supposed to be whenever the will goes into effect.
+    // 3.1.3.2.4 Message Expiry Interval
+    // > If present, the Four Byte value is the lifetime of the Will Message in seconds
+    // > and is sent as the Publication Expiry Interval *when the Server publishes the Will Message*.
+    pub transaction: PublishTrasaction,
+}
+
 // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Session_State
 #[derive(Default)]
 pub(crate) struct Session {
     /// The last will's delay can be greater than the session's expiry, but
     /// session expiry always leads to the last will being sent, dropped, or
     /// overwritten (3.1.3.2.2).
-    pub last_will: Option<LastWill>,
-    pub last_will_properties: Option<LastWillProperties>,
+    pub last_will: Option<Will>,
 }
 
 // Separate type to allow `Mailbox` to be borrowed for the duration of a session.

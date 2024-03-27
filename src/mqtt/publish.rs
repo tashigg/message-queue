@@ -1,11 +1,13 @@
 use bytes::Bytes;
+use std::num::NonZeroU32;
 use std::ops::Not;
 
 use tashi_collections::FnvHashMap;
 
 use protocol::{
-    DisconnectReasonCode, Packet, PubAck, PubAckProperties, PubAckReason, PubRec, PubRecProperties,
-    PubRecReason, Publish, PublishProperties, QoS,
+    ConnectReturnCode, DisconnectReasonCode, LastWill, LastWillProperties, Packet, PubAck,
+    PubAckProperties, PubAckReason, PubRec, PubRecProperties, PubRecReason, Publish,
+    PublishProperties, QoS,
 };
 use rumqttd_protocol as protocol;
 use tce_message::PublishTrasaction;
@@ -18,15 +20,44 @@ use crate::tce_message::{
     BytesAsOctetString, PublishMeta, PublishTransactionProperties, TimestampSeconds, UserProperties,
 };
 
+use super::session::Will;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ValidateError {
     /// Malformed packet; disconnect.
-    Disconnect {
-        reason: DisconnectReasonCode,
-        message: String,
-    },
+    Disconnect(DisconnectError),
     /// Reject the `PUBLISH` with a reason code.
     Reject(RejectError),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct DisconnectError {
+    pub reason: DisconnectReason,
+    pub message: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum DisconnectReason {
+    ProtocolError,
+    TopicAliasInvalid,
+}
+
+impl DisconnectReason {
+    pub fn into_connack_reason(self) -> ConnectReturnCode {
+        match self {
+            Self::ProtocolError => ConnectReturnCode::ProtocolError,
+            Self::TopicAliasInvalid => panic!(
+                "BUG: Invalid alias occured while handling a connect packet (which doesn't have aliases)"
+            ),
+        }
+    }
+
+    pub fn into_disconnect_reason(self) -> DisconnectReasonCode {
+        match self {
+            Self::ProtocolError => DisconnectReasonCode::ProtocolError,
+            Self::TopicAliasInvalid => DisconnectReasonCode::TopicAliasInvalid,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -46,6 +77,20 @@ pub enum RejectReason {
     PacketIdentifierInUse,
     QuotaExceeded,
     PayloadFormatInvalid,
+}
+
+impl RejectReason {
+    pub fn into_connack_reason(self) -> ConnectReturnCode {
+        match self {
+            RejectReason::UnspecifiedError => ConnectReturnCode::UnspecifiedError,
+            RejectReason::ImplementationSpecificError => ConnectReturnCode::ImplementationSpecificError,
+            RejectReason::NotAuthorized => ConnectReturnCode::NotAuthorized,
+            RejectReason::TopicNameInvalid => ConnectReturnCode::TopicNameInvalid,
+            RejectReason::PacketIdentifierInUse => panic!("BUG: `PacketIdentifierInUse` occurred during a connect (no packet ID should exist)"),
+            RejectReason::QuotaExceeded => ConnectReturnCode::QuotaExceeded,
+            RejectReason::PayloadFormatInvalid => ConnectReturnCode::PayloadFormatInvalid,
+        }
+    }
 }
 
 impl RejectError {
@@ -102,10 +147,10 @@ impl RejectError {
 
 macro_rules! protocol_err (
     ($($fmt:tt)*) => {
-        return Err(ValidateError::Disconnect {
-            reason: DisconnectReasonCode::ProtocolError,
+        return Err(ValidateError::Disconnect(DisconnectError {
+            reason: DisconnectReason::ProtocolError,
             message: format!($($fmt)*)
-        })
+        }))
     }
 );
 
@@ -126,6 +171,41 @@ macro_rules! validate {
             }));
         }
     }
+}
+
+pub fn validate_and_convert_last_will(
+    last_will: &LastWill,
+    props: Option<&LastWillProperties>,
+) -> Result<Will, ValidateError> {
+    Ok(Will {
+        delay: props
+            .as_ref()
+            .and_then(|it| it.delay_interval)
+            .and_then(NonZeroU32::new),
+        transaction: validate_and_convert(
+            Publish::with_all(
+                false,
+                last_will.qos,
+                0,
+                last_will.retain,
+                last_will.topic.clone(),
+                last_will.message.clone(),
+            ),
+            props.map(|it| PublishProperties {
+                payload_format_indicator: it.payload_format_indicator,
+                message_expiry_interval: it.message_expiry_interval,
+                topic_alias: None,
+                response_topic: it.response_topic.clone(),
+                correlation_data: it.correlation_data.clone(),
+                user_properties: it.user_properties.clone(),
+                subscription_identifiers: Vec::new(),
+                content_type: it.content_type.clone(),
+            }),
+            0,
+            // there are no aliases, so we don't update the alias map.
+            &mut Default::default(),
+        )?,
+    })
 }
 
 pub fn validate_and_convert(
@@ -198,10 +278,10 @@ pub fn validate_and_convert(
         if let Some(topic_alias) = props.topic_alias {
             macro_rules! invalid_alias (
                 ($($fmt:tt)*) => {
-                    return Err(ValidateError::Disconnect {
-                        reason: DisconnectReasonCode::TopicAliasInvalid,
+                    return Err(ValidateError::Disconnect(DisconnectError {
+                        reason: DisconnectReason::TopicAliasInvalid,
                         message: format!($($fmt)*)
-                    });
+                    }));
                 }
             );
 
