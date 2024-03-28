@@ -24,8 +24,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{cmp, io, iter};
 use tashi_collections::FnvHashMap;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
@@ -34,7 +33,7 @@ use tokio_util::sync::CancellationToken;
 /// as well as the send quota we apply to outgoing traffic.
 const DEFAULT_RECEIVE_MAXIMUM: u16 = 1024;
 
-pub struct Connection {
+pub struct Connection<S: AsyncRead + AsyncWrite> {
     id: ConnectionId,
 
     remote_addr: SocketAddr,
@@ -43,7 +42,7 @@ pub struct Connection {
     client_index: Option<ClientIndex>,
 
     protocol: protocol::v5::V5,
-    stream: TcpStream,
+    stream: S,
     read_buf: BytesMut,
     write_buf: BytesMut,
 
@@ -103,10 +102,11 @@ macro_rules! disconnect (
     };
 );
 
-impl Connection {
+// fixme: overly lazy, doesn't need to be unpin probably.
+impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
     pub fn new(
         id: ConnectionId,
-        stream: TcpStream,
+        stream: S,
         remote_addr: SocketAddr,
         token: CancellationToken,
         shared: Arc<Shared>,
@@ -650,16 +650,24 @@ impl Connection {
 
         self.shared
             .tce_platform
-            .send(transaction.to_der().or_else(|e| {
-                tracing::error!(?transaction, ?e, "failed to encode transaction");
-                disconnect!(
-                    ProtocolError,
-                    "PUBLISH exceeded consensus protocol size limit"
-                );
-            })?)
+            .reserve_tx()
+            .await
             // If this fails, we'll drop the connection without sending a PUBACK/PUBREC,
             // so the client will know we died before taking ownership and can try another broker.
-            .or_else(|_| disconnect!(ServerShuttingDown, "broker shutting down"))?;
+            .or_else(|_| disconnect!(ServerShuttingDown, "broker shutting down"))?
+            .send(
+                transaction
+                    .to_der()
+                    .map_err(Into::into)
+                    .and_then(|it| it.try_into())
+                    .or_else(|e| {
+                        tracing::error!(?transaction, ?e, "failed to encode transaction");
+                        disconnect!(
+                            ProtocolError,
+                            "PUBLISH exceeded consensus protocol size limit"
+                        );
+                    })?,
+            );
 
         router.transaction(transaction).await;
 

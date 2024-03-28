@@ -1720,7 +1720,7 @@ dependencies = [
 [[package]]
 name = "tashi-collections"
 version = "0.3.0"
-source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=a87e2453ffca6fd2fdc200b895edfc0c69f1810a#a87e2453ffca6fd2fdc200b895edfc0c69f1810a"
+source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=7f6f9fce11fbaa16902c3f03524c2bad981d6e3d#7f6f9fce11fbaa16902c3f03524c2bad981d6e3d"
 dependencies = [
  "fnv",
  "hashbrown",
@@ -1729,7 +1729,7 @@ dependencies = [
 [[package]]
 name = "tashi-consensus-engine"
 version = "0.3.0"
-source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=a87e2453ffca6fd2fdc200b895edfc0c69f1810a#a87e2453ffca6fd2fdc200b895edfc0c69f1810a"
+source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=7f6f9fce11fbaa16902c3f03524c2bad981d6e3d#7f6f9fce11fbaa16902c3f03524c2bad981d6e3d"
 dependencies = [
  "backoff",
  "bytes",
@@ -1781,12 +1781,14 @@ dependencies = [
  "num_enum",
  "rand",
  "rumqttd-protocol",
+ "rustls-pemfile",
  "serde",
  "slotmap",
  "tashi-collections",
  "tashi-consensus-engine",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tokio-util",
  "toml",
  "tracing",

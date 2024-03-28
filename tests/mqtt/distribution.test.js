@@ -1,4 +1,5 @@
 const mqtt = require("mqtt");
+const fs = require("node:fs");
 
 describe("publish to node 1, receive from node2", () => {
     // Putting tests in a `describe()` block appears to cause them to execute sequentially.
@@ -73,4 +74,38 @@ describe("publish to node 1, receive from node2", () => {
         }
     });
 
+    test("synchronously, over TLS", async () => {
+        // Note: if you use `localhost` here the TLS stack will try to verify it against the subjectAltName
+        // on the server's TLS certificate. Using an IP address appears to bypass that.
+        var client1 = await mqtt.connectAsync("mqtts://127.0.0.1:8883", {
+            // Defaults to 4 otherwise
+            protocolVersion: 5,
+            servername: "broker1.example.com",
+            ca: fs.readFileSync("dmq/key_0.crt"),
+            minVersion: "TLSv1.3"
+        });
+        var client2 = await mqtt.connectAsync(
+            "mqtts://127.0.0.1:8884",
+            {
+                protocolVersion: 5,
+                servername: "broker2.example.com",
+                ca: fs.readFileSync("dmq/key_1.crt"),
+                minVersion: "TLSv1.3"
+            });
+
+        await client2.subscribeAsync("weather");
+
+        await client1.publishAsync("weather", "cloudy");
+
+        return new Promise((resolver) => {
+            client2.on("message", async (topic, message, packet) => {
+                console.log(topic.toString() + " message received: " + message.toString());
+                expect(topic.toString()).toBe("weather");
+                expect(message.toString()).toBe("cloudy");
+                await client1.endAsync();
+                await client2.endAsync();
+                resolver();
+            });
+        });
+    });
 });
