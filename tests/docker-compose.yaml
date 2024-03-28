@@ -14,14 +14,15 @@ services:
       - ./dmq:/home/message-queue/dmq
     ports:
       - "1883:1883"
+      - "8883:8883"
     networks:
       mesh-app-bridge:
         aliases:
-        - broker1.example.com
+          - broker1.example.com
     environment: &broker_env
       RUST_LOG: tashi_consensus_engine=warn,tashi_message_queue=trace
     entrypoint: target/release/tashi-message-queue
-    command: run --secret-key-file dmq/key_0.pem /home/message-queue/dmq
+    command: run --secret-key-file dmq/key_0.pem --tls-cert-file=dmq/key_0.crt --dns-name broker1.example.com /home/message-queue/dmq
 
   broker2:
     container_name: broker2
@@ -32,13 +33,14 @@ services:
       - ./dmq:/home/message-queue/dmq
     ports:
       - "1884:1883"
+      - "8884:8883"
     networks:
       mesh-app-bridge:
         aliases:
-        - broker2.example.com
+          - broker2.example.com
     environment: *broker_env
     entrypoint: target/release/tashi-message-queue
-    command: run --secret-key-file dmq/key_1.pem /home/message-queue/dmq
+    command: run --secret-key-file dmq/key_1.pem --tls-cert-file=dmq/key_1.crt --dns-name broker2.example.com /home/message-queue/dmq
 
 networks:
   mesh-app-bridge:

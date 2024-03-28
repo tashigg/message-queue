@@ -39,7 +39,9 @@ der = { version = "0.7.8", features = ["derive"] }
 futures = { version = "0.3.30", features = ["std", "alloc"] }
 slotmap = "1.0.7"
 arbitrary = { version = "1", optional = true, features = ["derive"] }
+# TODO: upgrade RusTLS in TCE and message-queue [TG-461]
 tokio-rustls = "0.24.1"
+rustls-pemfile = "1.0.4"
 
 [dependencies.clap]
 version = "4.5.0"

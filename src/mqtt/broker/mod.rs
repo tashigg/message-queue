@@ -130,7 +130,7 @@ struct ConnectionData {
 
 pub struct TlsConfig {
     pub socket_addr: SocketAddr,
-    pub cert: Vec<Certificate>,
+    pub cert_chain: Vec<Certificate>,
     pub key: PrivateKey,
 }
 
@@ -153,7 +153,7 @@ impl MqttBroker {
                     let config = tokio_rustls::rustls::ServerConfig::builder()
                         .with_safe_defaults()
                         .with_no_client_auth()
-                        .with_single_cert(tls_config.cert, tls_config.key)?;
+                        .with_single_cert(tls_config.cert_chain, tls_config.key)?;
 
                     tokio_rustls::TlsAcceptor::from(Arc::new(config))
                 };

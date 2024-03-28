@@ -1,12 +1,12 @@
-use color_eyre::eyre;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
+use color_eyre::eyre;
 use color_eyre::eyre::Context;
 use tashi_consensus_engine::sync::quic::QuicSocket;
 use tashi_consensus_engine::{Platform, SecretKey};
+use tokio_rustls::rustls;
 
 use crate::cli::LogFormat;
 use crate::config;
@@ -32,7 +32,7 @@ pub struct RunArgs {
     pub secret_key: SecretKeyOpt,
 
     #[command(flatten)]
-    pub tls_config: Option<TlsConfig>,
+    pub tls_config: TlsConfig,
 
     #[clap(default_value = "dmq/")]
     pub config_dir: PathBuf,
@@ -52,12 +52,27 @@ pub struct SecretKeyOpt {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct TlsConfig {
-    #[clap(long, default_value = "0.0.0.0:8883", required = false)]
+    #[clap(long)]
+    pub disable_tls: bool,
+
+    #[clap(long, default_value = "0.0.0.0:8883")]
     pub mqtt_tls_listen_addr: SocketAddr,
-    #[clap(long, required = false)]
+
+    #[clap(long, default_value = "foxmq.local")]
     pub dns_name: String,
-    #[clap(long, required = false)]
-    pub tls_secret_key: String,
+
+    /// Override the secret key used for TLS handshakes.
+    ///
+    /// Defaults to the main secret key (`--secret-key`/`--secret-key-file`).
+    #[clap(long)]
+    pub tls_key_file: Option<PathBuf>,
+
+    /// Path to the X.509 certificate to use for TLS.
+    ///
+    /// Defaults to a certificate self-signed with either `--tls-key-file`
+    /// or the main secret key (`--secret-key`/`--secret-key-file`).
+    #[clap(long)]
+    pub tls_cert_file: Option<PathBuf>,
 }
 
 impl SecretKeyOpt {
@@ -70,13 +85,7 @@ impl SecretKeyOpt {
         }
 
         if let Some(path) = &self.secret_key_file {
-            // There's no benefit to using `tokio::fs` because it just does the blocking work on a background thread.
-            let pem = std::fs::read(path)
-                .wrap_err_with(|| format!("error reading {}", path.display()))?;
-
-            return SecretKey::from_pem(&pem).wrap_err_with(|| {
-                format!("error reading P-256 secret key from {}", path.display())
-            });
+            return read_secret_key(path);
         }
 
         unreachable!("BUG: Clap should have required one of `--secret-key` or `--secret-key-file`")
@@ -107,10 +116,52 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
 
     eyre::ensure!(!users.by_username.is_empty() || users.auth.allow_anonymous_login,);
 
-    let tce_config =
-        create_tce_config(&args, &addresses).wrap_err("error initializing TCE config")?;
+    let secret_key = args.secret_key.read_key()?;
 
-    main_async(args, users, tce_config)
+    let tce_config = create_tce_config(secret_key.clone(), &addresses)
+        .wrap_err("error initializing TCE config")?;
+
+    let tls_config = (!args.tls_config.disable_tls)
+        .then(|| {
+            let tls_socket_addr = args.tls_config.mqtt_tls_listen_addr;
+
+            let key = if let Some(secret_key_file) = &args.tls_config.tls_key_file {
+                read_secret_key(secret_key_file)?
+            } else {
+                secret_key
+            };
+
+            let cert_chain = if let Some(cert_file) = &args.tls_config.tls_cert_file {
+                let cert_pem = std::fs::read(cert_file)
+                    .wrap_err_with(|| format!("error reading from {}", cert_file.display()))?;
+
+                let certs = rustls_pemfile::certs(&mut &cert_pem[..]).wrap_err_with(|| {
+                    format!(
+                        "error reading certificate chain from {}",
+                        cert_file.display()
+                    )
+                })?;
+
+                certs.into_iter().map(rustls::Certificate).collect()
+            } else {
+                vec![tashi_consensus_engine::Certificate::generate_self_signed(
+                    &key,
+                    tls_socket_addr,
+                    &args.tls_config.dns_name,
+                    None,
+                )?
+                .into_rustls()]
+            };
+
+            eyre::Ok(broker::TlsConfig {
+                socket_addr: tls_socket_addr,
+                cert_chain,
+                key: key.to_rustls()?,
+            })
+        })
+        .transpose()?;
+
+    main_async(args, users, tce_config, tls_config)
 }
 
 // `#[tokio::main]` doesn't have to be attached to the actual `main()`, and it can accept args
@@ -119,6 +170,7 @@ async fn main_async(
     args: RunArgs,
     users: UsersConfig,
     tce_config: tashi_consensus_engine::Config,
+    tls_config: Option<broker::TlsConfig>,
 ) -> crate::Result<()> {
     let (tce_platform, tce_message_stream) = Platform::start(
         tce_config,
@@ -127,34 +179,6 @@ async fn main_async(
     )?;
 
     let tce_platform = Arc::new(tce_platform);
-
-    let tls_config = args
-        .tls_config
-        .map(|tls_config| {
-            let tls_socket_addr = tls_config.mqtt_tls_listen_addr;
-            let key = SecretKeyOpt {
-                secret_key: Some(tls_config.tls_secret_key),
-                secret_key_file: None,
-            }
-            .read_key()?;
-            let cert = tashi_consensus_engine::Certificate::generate_self_signed(
-                &key,
-                tls_socket_addr,
-                &tls_config.dns_name,
-                None,
-            )?;
-
-            let cert = cert.into_rustls();
-
-            std::fs::write("cert.der", cert.0.as_slice())?;
-
-            eyre::Ok(broker::TlsConfig {
-                socket_addr: tls_socket_addr,
-                cert: Vec::from([cert]),
-                key: key.to_rustls()?,
-            })
-        })
-        .transpose()?;
 
     let mut broker = MqttBroker::bind(
         args.mqtt_listen_addr,
@@ -187,13 +211,10 @@ async fn main_async(
     broker.shutdown().await
 }
 
-/// NOTE: uses blocking I/O internally.
 fn create_tce_config(
-    args: &RunArgs,
+    secret_key: SecretKey,
     addresses: &Addresses,
 ) -> crate::Result<tashi_consensus_engine::Config> {
-    let secret_key = args.secret_key.read_key()?;
-
     let nodes = addresses
         .addresses
         .iter()
@@ -203,4 +224,13 @@ fn create_tce_config(
     Ok(tashi_consensus_engine::Config::new(secret_key)
         .initial_nodes(nodes)
         .report_events_before_consensus())
+}
+
+/// NOTE: uses blocking I/O internally.
+fn read_secret_key(path: &Path) -> crate::Result<SecretKey> {
+    // There's no benefit to using `tokio::fs` because it just does the blocking work on a background thread.
+    let pem = std::fs::read(path).wrap_err_with(|| format!("error reading {}", path.display()))?;
+
+    SecretKey::from_pem(&pem)
+        .wrap_err_with(|| format!("error reading P-256 secret key from {}", path.display()))
 }
