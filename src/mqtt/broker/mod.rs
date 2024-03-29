@@ -1,13 +1,16 @@
+use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use color_eyre::eyre::{self, Context};
+use der::Encode;
 use futures::future::OptionFuture;
 use rand::RngCore;
+use rumqttd_protocol::QoS;
 use slotmap::SlotMap;
 use tashi_collections::{hash_map, HashMap};
-use tashi_consensus_engine::{MessageStream, Platform};
+use tashi_consensus_engine::{MessageStream, Platform, TxnPermit, TxnTryReserveError};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
@@ -21,6 +24,9 @@ use crate::mqtt::router::{system_publish, MqttRouter, RouterHandle};
 use crate::mqtt::session::{InactiveSessions, SessionStore};
 use crate::mqtt::{client_id, ClientId, ClientIndex, ConnectionId};
 use crate::password::PasswordHashingPool;
+use crate::tce_message::{TimestampSeconds, Transaction, TransactionData};
+
+use super::session::Will;
 
 mod connection;
 
@@ -72,6 +78,9 @@ pub struct MqttBroker {
 
     clients: Clients,
 
+    // this is a vecdeque just to make it fair, it doesn't really *have* to be one.
+    pending_wills: VecDeque<PendingWill>,
+
     /// Generator for `ConnectionId`s
     connections: SlotMap<ConnectionId, ()>,
     tasks: JoinSet<ConnectionData>,
@@ -83,6 +92,12 @@ pub struct MqttBroker {
     inactive_sessions: InactiveSessions,
 
     router: MqttRouter,
+}
+
+struct PendingWill {
+    client_id: ClientId,
+    client_idx: ClientIndex,
+    will: Will,
 }
 
 #[derive(Default)]
@@ -182,6 +197,7 @@ impl MqttBroker {
             tls,
             token,
             clients: Default::default(),
+            pending_wills: Default::default(),
             connections: SlotMap::with_capacity_and_key(256),
             tasks: JoinSet::new(),
             shared: Arc::new(Shared {
@@ -204,6 +220,9 @@ impl MqttBroker {
 
         let mut shutdown = false;
 
+        // hack: borrowck limitations means we'd have an overlapping borrow.
+        let tce_platform = self.shared.tce_platform.clone();
+
         while !shutdown {
             let tls_listner_fut =
                 OptionFuture::from(self.tls.as_ref().map(|it| it.listener.accept()));
@@ -218,7 +237,7 @@ impl MqttBroker {
                     }
 
                     self.connections.remove(data.id);
-                    handle_connection_lost(&mut self.inactive_sessions, data);
+                    handle_connection_lost(&mut self.inactive_sessions, &mut self.router, &self.shared.tce_platform, data);
                 }
                 res = self.listener.accept() => {
                     self.handle_accept(res);
@@ -233,13 +252,56 @@ impl MqttBroker {
                     res.wrap_err("error from router task")?;
                     eyre::bail!("router task exited unexpectedly");
                 }
-                Some(client_id) = self.inactive_sessions.next_expiration() => {
-                    if let Some(client_idx) = self.clients.index_from_id(&client_id) {
-                        self.router.evict_client(client_idx);
-                        self.clients.remove(client_idx);
+                Some(event) = self.inactive_sessions.next_event() => {
+                    self.handle_inactive_session_event(event)?;
+                }
+                Ok(permit) = tce_platform.reserve_tx(), if !self.pending_wills.is_empty() => {
+                    // technically a bug if this fails, but it doesn't really matter.
+                    if let Some(will) = self.pending_wills.pop_front() {
+                        dispatch_will(&mut self.router, permit, will.client_id, will.client_idx, will.will)
                     }
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    fn handle_inactive_session_event(&mut self, event: super::session::Event) -> crate::Result<()> {
+        let client_id = match &event {
+            super::session::Event::Expiration(id, _)
+            | super::session::Event::WillElapsed(id, _) => *id,
+        };
+
+        let Some(client_idx) = self.clients.index_from_id(&client_id) else {
+            return Ok(());
+        };
+
+        match event {
+            // if we have other on-expiration actions, now would be the time to do them.
+            super::session::Event::Expiration(_, session) => {
+                // currently the only on-expiration event is publishing the `last_will`.
+                if let Some(will) = session.last_will {
+                    execute_will(
+                        &mut self.router,
+                        &self.shared.tce_platform,
+                        client_id,
+                        client_idx,
+                        will,
+                    );
+                }
+
+                self.router.evict_client(client_idx);
+                self.clients.remove(client_idx);
+            }
+
+            super::session::Event::WillElapsed(_, will) => execute_will(
+                &mut self.router,
+                &self.shared.tce_platform,
+                client_id,
+                client_idx,
+                will,
+            ),
         }
 
         Ok(())
@@ -347,6 +409,7 @@ impl MqttBroker {
                     .replace(connection_id)
                 {
                     // TODO: close replaced connection and wait for session to be released [TG-440]
+                    // Doing this also involves sending a will if applicable.
                     tracing::warn!(%client_id, "leaking replaced connection for client ID");
                     self.connections.remove(replaced_connection);
                 }
@@ -391,7 +454,12 @@ impl MqttBroker {
         self.token.cancel();
 
         while let Some(Ok(data)) = self.tasks.join_next().await {
-            handle_connection_lost(&mut self.inactive_sessions, data);
+            handle_connection_lost(
+                &mut self.inactive_sessions,
+                &mut self.router,
+                &self.shared.tce_platform,
+                data,
+            );
             tracing::info!("{} connections remaining", self.tasks.len());
         }
 
@@ -515,9 +583,15 @@ impl Clients {
 
 // This is a free function because it would require a borrow of Broker while
 // listener is partially moved in shutdown.
-fn handle_connection_lost(inactive_sessions: &mut InactiveSessions, data: ConnectionData) {
+fn handle_connection_lost(
+    inactive_sessions: &mut InactiveSessions,
+    router: &mut MqttRouter,
+    tce_platform: &Platform,
+    data: ConnectionData,
+) {
     let ConnectionData {
         client_id,
+        client_index,
         store: session,
         ..
     } = data;
@@ -533,5 +607,88 @@ fn handle_connection_lost(inactive_sessions: &mut InactiveSessions, data: Connec
         inactive_sessions.insert(client_id, session);
     } else {
         tracing::trace!(%client_id, "session expired");
+        // will is published on session close (if present).
+
+        if let Some(will) = session.session.last_will {
+            let Some(client_index) = client_index else {
+                return;
+            };
+
+            execute_will(router, tce_platform, client_id, client_index, will)
+        }
     }
+}
+
+fn try_reserve_will(
+    tce_platform: &Platform,
+    client_id: ClientId,
+    qos: QoS,
+) -> Result<Option<TxnPermit<'_>>, ()> {
+    match tce_platform.try_reserve_tx() {
+        Ok(reservation) => Ok(Some(reservation)),
+        Err(TxnTryReserveError::Closed) => {
+            // We need to keep platform around until the broker shuts down... Or we need to store the wills.
+            // Currently we do neither, and plan on doing the first one.
+            tracing::error!(%client_id, "Failed to send will due to platform shut down");
+            Ok(None)
+        }
+        // we can ignore QoS 0 messages if our buffers are full (and this counts).
+        Err(TxnTryReserveError::Full) if matches!(qos, QoS::AtMostOnce) => {
+            tracing::debug!("Ignoring QoS 0 will due to full load");
+            Ok(None)
+        }
+        Err(TxnTryReserveError::Full) => Err(()),
+    }
+}
+fn dispatch_will(
+    router: &mut MqttRouter,
+    permit: TxnPermit<'_>,
+    client_id: ClientId,
+    client_idx: ClientIndex,
+    mut will: Will,
+) {
+    // we have to reset the timestamp_received because we're only publishing the will *now*.
+    will.transaction.timestamp_received = TimestampSeconds::now();
+    tracing::trace!("submitting transaction: {:?}", will.transaction);
+
+    let transaction = Transaction {
+        data: TransactionData::Publish(will.transaction),
+    };
+
+    let txn = match transaction
+        .to_der()
+        .map_err(Into::into)
+        .and_then(TryInto::try_into)
+    {
+        Ok(txn) => txn,
+        Err(err) => {
+            tracing::warn!(%client_id, "expiring client will invalid {err}");
+            // don't kill the broker.
+            return;
+        }
+    };
+
+    permit.send(txn);
+
+    // *sigh*, we need to wrap the transaction to send it over TCE, but we need to unwrap it again right after to publish a will.
+    // When/if we have multiple transaction types this is going to need an `unreachable!()` :/
+    let transaction = match transaction.data {
+        TransactionData::Publish(data) => data,
+    };
+
+    router.publish_will(client_idx, transaction);
+}
+
+fn execute_will(
+    router: &mut MqttRouter,
+    tce_platform: &Platform,
+    client_id: ClientId,
+    client_idx: ClientIndex,
+    will: Will,
+) {
+    match try_reserve_will(tce_platform, client_id, will.transaction.meta.qos()) {
+        Ok(None) => {}
+        Ok(Some(permit)) => dispatch_will(router, permit, client_id, client_idx, will),
+        Err(()) => todo!("will reserve full"),
+    };
 }

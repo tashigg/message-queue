@@ -264,7 +264,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
     async fn handle_packet(
         &mut self,
-        _session: &mut Session,
+        session: &mut Session,
         mailbox: &mut OpenMailbox<'_>,
         router: &mut RouterConnection,
         packet: Packet,
@@ -356,6 +356,22 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             Packet::Connect(..) => {
                 // MQTT-3.1.0-2
                 disconnect!(ProtocolError, "second CONNECT packet");
+            }
+            Packet::Disconnect(disconnect, _disconnect_props) => {
+                // todo: we should be complaining really loudly if we get a packet after this (MQTT-3.14.4-1) since the client MUST NOT send a packet and MUST hang up.
+                // todo: we should also just hangup ourselves:
+                // > On receipt of DISCONNECT, the receiver:
+                // > SHOULD close the Network Connection.
+
+                if matches!(
+                    disconnect.reason_code,
+                    DisconnectReasonCode::NormalDisconnection
+                ) {
+                    // kill the will (prevent us from sending it later).
+                    session.last_will = None;
+                }
+
+                // todo: handle session expiry props
             }
             _ => {
                 tracing::warn!(?packet, "received unsupported");

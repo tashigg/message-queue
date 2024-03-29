@@ -114,6 +114,15 @@ impl MqttRouter {
             .ok();
     }
 
+    pub fn publish_will(&mut self, client_index: ClientIndex, txn: PublishTrasaction) {
+        self.system_tx
+            .send(SystemCommand::PublishWill {
+                willing_client: client_index,
+                txn,
+            })
+            .ok();
+    }
+
     pub fn evict_client(&mut self, client_index: ClientIndex) {
         self.system_tx
             .send(SystemCommand::EvictClient { client_index })
@@ -283,6 +292,11 @@ enum SystemCommand {
     },
     Publish {
         source: Span,
+        txn: PublishTrasaction,
+    },
+    // Avoid blocking the broker task by using a system command instead of a router command.
+    PublishWill {
+        willing_client: ClientIndex,
         txn: PublishTrasaction,
     },
     EvictClient {
@@ -727,6 +741,13 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
         SystemCommand::Publish { source, txn } => {
             dispatch(state, txn, PublishOrigin::System { source });
         }
+
+        //
+        SystemCommand::PublishWill {
+            txn,
+            willing_client,
+        } => dispatch(state, txn, PublishOrigin::Local(willing_client)),
+
         SystemCommand::EvictClient { client_index } => {
             state.evict_client(client_index);
         }
