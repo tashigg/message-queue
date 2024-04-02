@@ -14,7 +14,6 @@ use tokio_util::time::{delay_queue, DelayQueue};
 #[derive(Default)]
 pub(crate) struct InactiveSessions {
     sessions: HashMap<ClientId, InactiveSession>,
-    // todo: should this just be one big delay queue with an enum discriminant?
     expirations: DelayQueue<ClientId>,
     will_expirations: DelayQueue<ClientId>,
 }

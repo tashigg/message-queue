@@ -672,9 +672,7 @@ fn dispatch_will(
 
     // *sigh*, we need to wrap the transaction to send it over TCE, but we need to unwrap it again right after to publish a will.
     // When/if we have multiple transaction types this is going to need an `unreachable!()` :/
-    let transaction = match transaction.data {
-        TransactionData::Publish(data) => data,
-    };
+    let TransactionData::Publish(transaction) = transaction.data;
 
     router.publish_will(client_idx, transaction);
 }

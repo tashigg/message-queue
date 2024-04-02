@@ -359,9 +359,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             }
             Packet::Disconnect(disconnect, _disconnect_props) => {
                 // todo: we should be complaining really loudly if we get a packet after this (MQTT-3.14.4-1) since the client MUST NOT send a packet and MUST hang up.
-                // todo: we should also just hangup ourselves:
-                // > On receipt of DISCONNECT, the receiver:
-                // > SHOULD close the Network Connection.
+
+                // todo: handle session expiry props
+                // if we recieve a non-zero `session_expiry_interval` when the session expiry interval *was* zero, we need to ignore the packet and `disconnect!` with a protocol error.
 
                 if matches!(
                     disconnect.reason_code,
@@ -371,7 +371,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                     session.last_will = None;
                 }
 
-                // todo: handle session expiry props
+                // > On receipt of DISCONNECT, the receiver:
+                // > SHOULD close the Network Connection.
+                self.stream
+                    .shutdown()
+                    .await
+                    .map_err(ConnectionError::WriteError)?;
             }
             _ => {
                 tracing::warn!(?packet, "received unsupported");
@@ -489,20 +494,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         }
 
         // we have to check the `last_will` for validity (if it even exists).
-        // fixme: this is kinda a hacky way of doing this. It'd probably be ideal to not use `publish` for this, but it mostly makes sense to do so.
-
         store.session.last_will = match last_will
             .as_ref()
             .map(|it| publish::validate_and_convert_last_will(it, last_will_properties.as_ref()))
-            .transpose()
         {
-            Ok(value) => value,
-            Err(ValidateError::Disconnect(err)) => {
+            Some(Ok(value)) => Some(value),
+            None => None,
+            Some(Err(ValidateError::Disconnect(err))) => {
                 self.disconnect_on_connect_error(err.reason.into_connack_reason(), err.message)
                     .await?;
                 return Ok(None);
             }
-            Err(ValidateError::Reject(err)) => {
+            Some(Err(ValidateError::Reject(err))) => {
                 self.disconnect_on_connect_error(
                     err.reason.into_connack_reason(),
                     err.message.unwrap_or_else(String::new),
