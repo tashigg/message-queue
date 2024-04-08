@@ -170,3 +170,296 @@ jobs:
       - name: Stop the message queue
         if: always()
         run: docker compose stop
+
+  tmq-build-macos:
+    name: Release Build - macOS
+    if: ${{ inputs.enable-macOS || inputs.release-version != '' }}
+    needs: tmq-check
+    runs-on: macOS
+    timeout-minutes: 30
+    env:
+      GIT_SSH_COMMAND: ssh -i .ssh/id_ed25519
+    steps:
+      - name: Check out
+        uses: actions/checkout@v2
+
+      - name: Install rust
+        run: |
+          echo $PATH
+          rustup toolchain install stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Add TCE Deploy Key
+        run: |
+          eval "$(ssh-agent -s)"
+          mkdir -p .ssh
+          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> .ssh/id_ed25519
+          chmod 400 .ssh/id_ed25519
+          ssh-add .ssh/id_ed25519
+          
+          bash docker-util/test-ssh.sh
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v1
+        with:
+          key: macOS-build
+
+      - name: Build
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Create Universal Binary
+        run: |
+          lipo \
+          target/aarch64-apple-darwin/release/tashi-message-queue \
+          target/x86_64-apple-darwin/release/tashi-message-queue \
+          -create \
+          -output foxmq
+
+      - name: Upload native libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmq-macos-universal
+          retention-days: 1
+          if-no-files-found: error
+          path: foxmq
+
+  tmq-build-windows:
+    name: Release Build - Windows
+    if: ${{ inputs.enable-windows || inputs.release-version != '' }}
+    needs: tmq-check
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v2
+
+      - name: Install rust
+        run: |
+          rustup toolchain install stable
+
+      - name: Add TCE Deploy Key
+        run: |
+          mkdir -p ~/.ssh
+          # Rewrite line endings in `TCE_DEPLOY_KEY` to LF with trailing newline
+          Set-Content -Path ~/.ssh/id_ed25519 -NoNewline -Value ((('${{ secrets.TCE_DEPLOY_KEY }}' -split '\r?\n') -join "`n") + "`n")
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Test Github SSH
+        run: |
+          ssh -v git@github.com
+          
+          # Counterintuitively, the above command returns exit status 1 when it succeeds,
+          # because github.com just immediately closes the connection, which counts as a failure.
+          if($LastExitCode -ne 1)
+          {
+            throw "Failed to connect to github.com via SSH. See the command output for details."
+          }
+          
+          exit 0      
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v1
+        with:
+          key: windows-2022-build
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Rename Executable
+        run: cp target/release/tashi-message-queue.exe foxmq.exe
+
+      - name: Upload native libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmq-windows-amd64
+          retention-days: 1
+          if-no-files-found: error
+          path: foxmq.exe
+
+  tmq-build-linux:
+    name: Release Build - Linux
+    # This one doesn't cost us anything to run
+    needs: tmq-check
+    runs-on: tashi-arc
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v2
+
+      # TODO: get rid of this unmaintained action
+      # `rustup` should be usable directly but it's not installed in our runner image.
+      - name: Install rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Add TCE Deploy Key
+        run: |
+          mkdir -p ~/.ssh
+          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          chmod 400 ~/.ssh/id_ed25519
+          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v1
+        with:
+          key: linux-build
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Rename Executable
+        run: cp target/release/tashi-message-queue foxmq
+
+      - name: Upload native libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmq-linux-amd64
+          retention-days: 1
+          if-no-files-found: error
+          path: foxmq
+
+  tmq-draft-release:
+    if: ${{ inputs.release-version != '' }}
+    runs-on: tashi-arc
+    needs:
+      - tmq-build-macos
+      - tmq-build-windows
+      - tmq-build-linux
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          path: tmq
+
+      # Creates a token with which we can use to read to/write from `tashigg/foxmq`.
+      - name: Create Deploy Token
+        id: create-token
+        uses: actions/create-github-app-token@v1
+        with:
+          # required
+          app-id: ${{ vars.FOXMQ_DEPLOY_APP_ID }}
+          private-key: ${{ secrets.FOXMQ_DEPLOY_APP_KEY }}
+          repositories: foxmq
+
+      - name: Add TCE Deploy Key
+        run: |
+          mkdir -p ~/.ssh
+          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          chmod 400 ~/.ssh/id_ed25519
+          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          repository: tashigg/foxmq
+          token: ${{ steps.create-token.outputs.token }}
+          path: foxmq
+
+      - name: Cache cargo installs
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo
+          key: generate-licenses
+
+      # TODO: get rid of this unmaintained action
+      # `rustup` should be usable directly but it's not installed in our runner image.
+      - name: Install rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+
+      - name: Install cargo-bundle-licenses
+        run: cargo install cargo-bundle-licenses
+
+      - name: Set the git user name and email
+        run: |
+          git config --global user.name "Tashi Automatic Builder"
+          git config --global user.email "noreply@tashi.gg"
+
+      - name: Generate third party licenses file
+        working-directory: tmq
+        run: |
+          cargo-bundle-licenses --format toml --output ../foxmq/THIRDPARTY.toml
+
+      - name: Create Release Branch
+        working-directory: foxmq
+        run: |
+          git checkout -b releases/${{ inputs.release-version }}
+          git add THIRDPARTY.toml
+          git commit -m "chore(auto): generate THIRDPARTY.toml"
+          git push origin releases/${{ inputs.release-version }}
+
+      - name: Fetch macOS Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tmq-macos-universal
+          path: foxmq_${{ inputs.release-version }}_macos-universal
+
+      - name: Fetch Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tmq-windows-amd64
+          path: foxmq_${{ inputs.release-version }}_windows-amd64
+
+      - name: Fetch Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tmq-linux-amd64
+          path: foxmq_${{ inputs.release-version }}_linux-amd64
+
+      - name: Re-package Artifacts
+        run: |
+          zip -j foxmq_${{ inputs.release-version }}_macos-universal.zip foxmq_${{ inputs.release-version }}_macos-universal/*
+          zip -j foxmq_${{ inputs.release-version }}_windows-amd64.zip foxmq_${{ inputs.release-version }}_windows-amd64/*
+          zip -j foxmq_${{ inputs.release-version }}_linux-amd64.zip foxmq_${{ inputs.release-version }}_linux-amd64/*
+
+      - name: Create a tashigg/foxmq Draft Release
+        uses: ncipollo/release-action@v1
+        with:
+          owner: tashigg
+          repo: foxmq
+          draft: true
+          artifactErrorsFailBuild: true
+          artifacts: "*.zip"
+          commit: releases/${{ inputs.release-version }}
+          tag: v${{ inputs.release-version }}
+          updateOnlyUnreleased: true
+          token: ${{ steps.create-token.outputs.token }}
+
+  tmq-docker-publish:
+    if: ${{ inputs.release-version != '' }}
+    runs-on: tashi-arc-dind
+    # Just to make sure the rest of the release process went okay.
+    needs: tmq-draft-release
+    steps:
+      - name: Log in to registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
+
+      - name: Fetch Linux Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tmq-linux-amd64
+          path: foxmq_${{ inputs.release-version }}_linux-amd64
+
+      - name: Build Docker Image
+        run: | # Since the image is so simple, we can just supply the Dockerfile inline and not have to check out.
+          docker build -t ghcr.io/tashigg/foxmq:${{ inputs.release-version }} -f - . <<- EOF          
+            # Not exactly the same environment as our builders, but we just need glibc mostly.
+            FROM debian:bookworm-slim
+          
+            LABEL org.opencontainers.image.source="https://github.com/tashigg/foxmq" 
+          
+            COPY foxmq_${{ inputs.release-version }}_linux-amd64/foxmq .
+          
+            ENTRYPOINT ["foxmq"]
+          EOF
+
+      - name: Push Docker Image
+        run: |
+          docker tag ghcr.io/tashigg/foxmq:${{ inputs.release-version }} ghcr.io/tashigg/foxmq:latest
+          docker push ghcr.io/tashigg/foxmq:${{ inputs.release-version }}
+          docker push ghcr.io/tashigg/foxmq:latest
