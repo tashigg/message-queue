@@ -264,7 +264,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
     async fn handle_packet(
         &mut self,
-        _session: &mut Session,
+        session: &mut Session,
         mailbox: &mut OpenMailbox<'_>,
         router: &mut RouterConnection,
         packet: Packet,
@@ -356,6 +356,27 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             Packet::Connect(..) => {
                 // MQTT-3.1.0-2
                 disconnect!(ProtocolError, "second CONNECT packet");
+            }
+            Packet::Disconnect(disconnect, _disconnect_props) => {
+                // todo: we should be complaining really loudly if we get a packet after this (MQTT-3.14.4-1) since the client MUST NOT send a packet and MUST hang up.
+
+                // todo: handle session expiry props
+                // if we recieve a non-zero `session_expiry_interval` when the session expiry interval *was* zero, we need to ignore the packet and `disconnect!` with a protocol error.
+
+                if matches!(
+                    disconnect.reason_code,
+                    DisconnectReasonCode::NormalDisconnection
+                ) {
+                    // kill the will (prevent us from sending it later).
+                    session.last_will = None;
+                }
+
+                // > On receipt of DISCONNECT, the receiver:
+                // > SHOULD close the Network Connection.
+                self.stream
+                    .shutdown()
+                    .await
+                    .map_err(ConnectionError::WriteError)?;
             }
             _ => {
                 tracing::warn!(?packet, "received unsupported");
@@ -472,6 +493,28 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             return Ok(None);
         }
 
+        // we have to check the `last_will` for validity (if it even exists).
+        store.session.last_will = match last_will
+            .as_ref()
+            .map(|it| publish::validate_and_convert_last_will(it, last_will_properties.as_ref()))
+        {
+            Some(Ok(value)) => Some(value),
+            None => None,
+            Some(Err(ValidateError::Disconnect(err))) => {
+                self.disconnect_on_connect_error(err.reason.into_connack_reason(), err.message)
+                    .await?;
+                return Ok(None);
+            }
+            Some(Err(ValidateError::Reject(err))) => {
+                self.disconnect_on_connect_error(
+                    err.reason.into_connack_reason(),
+                    err.message.unwrap_or_else(String::new),
+                )
+                .await?;
+                return Ok(None);
+            }
+        };
+
         // An empty client ID in the CONNECT does *not* imply a clean start.
         // There shouldn't be an existing session,
         // but we must retain session state after disconnect.
@@ -511,9 +554,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                     cmp::min(self.client_receive_maximum, receive_maximum);
             }
         }
-
-        store.session.last_will = last_will.clone();
-        store.session.last_will_properties = last_will_properties.clone();
 
         // TODO: don't enable this for v4
         store.mailbox.coalesce_deliveries(true);
@@ -625,8 +665,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             Ok(transaction) => Transaction {
                 data: TransactionData::Publish(transaction),
             },
-            Err(ValidateError::Disconnect { reason, message }) => {
-                return self.disconnect(reason, message).await;
+            Err(ValidateError::Disconnect(disconnect)) => {
+                return self
+                    .disconnect(
+                        disconnect.reason.into_disconnect_reason(),
+                        disconnect.message,
+                    )
+                    .await;
             }
             Err(ValidateError::Reject(reject)) => {
                 match qos {
