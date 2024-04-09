@@ -183,11 +183,14 @@ jobs:
       - name: Check out
         uses: actions/checkout@v2
 
+      # TODO: get rid of this unmaintained action
+      # `rustup` should just be installed directly on the macOS runner but the `rust-cache` action assumes
+      # that it can just trash `~/.cargo/bin` and I can't think of another place to install `rustup` that won't break
+      # some other assumption(s). This action at least handles all that for us.
       - name: Install rust
-        run: |
-          echo $PATH
-          rustup toolchain install stable
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
 
       - name: Add TCE Deploy Key
         run: |
@@ -453,7 +456,7 @@ jobs:
           
             LABEL org.opencontainers.image.source="https://github.com/tashigg/foxmq" 
           
-            COPY foxmq_${{ inputs.release-version }}_linux-amd64/foxmq .
+            COPY --chmod=555 foxmq_${{ inputs.release-version }}_linux-amd64/foxmq /usr/local/bin/foxmq
           
             ENTRYPOINT ["foxmq"]
           EOF
