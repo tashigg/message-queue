@@ -1,3 +1,7 @@
+# For use when executing the broker locally (comes in handy for debugging):
+#
+# $ foxmq run [OPTIONS] tests/foxmq.d-local
+
 # key_0.pem
 [[addresses]]
 key = """
@@ -7,7 +11,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE48VTK97faW815TQKbU/OY/ENsLmw
 -----END PUBLIC KEY-----
 """
 # Note: using the TCE listen port, not the MQTT listen port.
-addr = "172.16.238.2:49213"
+addr = "127.0.0.1:19793"
 
 # key_1.pem
 [[addresses]]
@@ -17,4 +21,4 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEdJH/jhJEJ8zJfnYbu1gXZnSJ7a+g
 K6BC6pGyzxP6tCQ75PX13XDaV9jdhAWvHt+gKOg+0u2nCikv8dfTOe6aTw==
 -----END PUBLIC KEY-----
 """
-addr = "172.16.238.3:49213"
+addr = "127.0.0.1:19794"

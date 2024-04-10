@@ -20,7 +20,7 @@ https://github.com/tashigg/rumqtt
 Use the `address-book` command, which supports various modes. One example is using a port range:
 ```bash
 cargo run -- address-book from-range 127.0.0.1 1883 1884
-cat dmq/address-book.toml
+cat foxmq.d/address-book.toml
 ```
 
 ### Manually generating keys

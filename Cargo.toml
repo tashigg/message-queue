@@ -5,11 +5,11 @@ members = [".", "rumqttd-protocol", "fuzz"]
 rumqttd-protocol = { path = "rumqttd-protocol" }
 
 [package]
-name = "tashi-message-queue"
+name = "foxmq"
 version = "0.1.0"
 edition = "2021"
 publish = false
-default-run = "tashi-message-queue"
+default-run = "foxmq"
 
 [dependencies.tashi-consensus-engine]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"

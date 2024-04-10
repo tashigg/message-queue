@@ -2,9 +2,9 @@
 
 use std::hint::black_box;
 
+use foxmq::mqtt::trie::{Filter, FilterTrie, TopicName};
 use libfuzzer_sys::arbitrary::Arbitrary;
 use libfuzzer_sys::fuzz_target;
-use tashi_message_queue::mqtt::trie::{Filter, FilterTrie, TopicName};
 
 #[derive(Debug, Arbitrary)]
 struct Data<'a> {

@@ -212,8 +212,8 @@ jobs:
       - name: Create Universal Binary
         run: |
           lipo \
-          target/aarch64-apple-darwin/release/tashi-message-queue \
-          target/x86_64-apple-darwin/release/tashi-message-queue \
+          target/aarch64-apple-darwin/release/foxmq \
+          target/x86_64-apple-darwin/release/foxmq \
           -create \
           -output foxmq
 
@@ -268,7 +268,7 @@ jobs:
         run: cargo build --release
 
       - name: Rename Executable
-        run: cp target/release/tashi-message-queue.exe foxmq.exe
+        run: cp target\release\foxmq.exe foxmq.exe
 
       - name: Upload native libraries
         uses: actions/upload-artifact@v4
@@ -310,8 +310,8 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Rename Executable
-        run: cp target/release/tashi-message-queue foxmq
+      - name: Move Executable
+        run: cp target/release/foxmq .
 
       - name: Upload native libraries
         uses: actions/upload-artifact@v4

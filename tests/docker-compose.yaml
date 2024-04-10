@@ -11,7 +11,7 @@ services:
         - default
     image: message-queue-test
     volumes:
-      - ./dmq:/home/message-queue/dmq
+      - ./foxmq.d:/home/message-queue/foxmq.d
     ports:
       - "1883:1883"
       - "8883:8883"
@@ -20,9 +20,9 @@ services:
         aliases:
           - broker1.example.com
     environment: &broker_env
-      RUST_LOG: tashi_consensus_engine=warn,tashi_message_queue=trace
-    entrypoint: target/release/tashi-message-queue
-    command: run --secret-key-file dmq/key_0.pem --tls-cert-file=dmq/key_0.crt --dns-name broker1.example.com /home/message-queue/dmq
+      RUST_LOG: tashi_consensus_engine=warn,foxmq=trace
+    entrypoint: target/release/foxmq
+    command: run --secret-key-file foxmq.d/key_0.pem --tls-cert-file=foxmq.d/key_0.crt --dns-name broker1.example.com /home/message-queue/foxmq.d
 
   broker2:
     container_name: broker2
@@ -30,7 +30,7 @@ services:
       - broker1
     image: message-queue-test
     volumes:
-      - ./dmq:/home/message-queue/dmq
+      - ./foxmq.d:/home/message-queue/foxmq.d
     ports:
       - "1884:1883"
       - "8884:8883"
@@ -39,8 +39,8 @@ services:
         aliases:
           - broker2.example.com
     environment: *broker_env
-    entrypoint: target/release/tashi-message-queue
-    command: run --secret-key-file dmq/key_1.pem --tls-cert-file=dmq/key_1.crt --dns-name broker2.example.com /home/message-queue/dmq
+    entrypoint: target/release/foxmq
+    command: run --secret-key-file foxmq.d/key_1.pem --tls-cert-file=foxmq.d/key_1.crt --dns-name broker2.example.com /home/message-queue/foxmq.d
 
 networks:
   mesh-app-bridge:
