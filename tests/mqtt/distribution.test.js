@@ -81,7 +81,7 @@ describe("publish to node 1, receive from node2", () => {
             // Defaults to 4 otherwise
             protocolVersion: 5,
             servername: "broker1.example.com",
-            ca: fs.readFileSync("dmq/key_0.crt"),
+            ca: fs.readFileSync("foxmq.d/key_0.crt"),
             minVersion: "TLSv1.3"
         });
         var client2 = await mqtt.connectAsync(
@@ -89,7 +89,7 @@ describe("publish to node 1, receive from node2", () => {
             {
                 protocolVersion: 5,
                 servername: "broker2.example.com",
-                ca: fs.readFileSync("dmq/key_1.crt"),
+                ca: fs.readFileSync("foxmq.d/key_1.crt"),
                 minVersion: "TLSv1.3"
             });
 

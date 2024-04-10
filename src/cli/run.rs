@@ -19,11 +19,14 @@ pub struct RunArgs {
     #[clap(short, long, default_value = "full")]
     pub log: LogFormat,
 
+    /// The TCP socket address to listen for MQTT (non-TLS) connections from clients.
     #[clap(short = 'L', long, default_value = "0.0.0.0:1883")]
-    pub mqtt_listen_addr: SocketAddr,
+    pub mqtt_addr: SocketAddr,
 
-    #[clap(short = 'T', long, default_value = "0.0.0.0:49213")]
-    pub tce_listen_addr: SocketAddr,
+    // `19793` is the ASCII characters `MQ` reinterpreted as a big-endian integer.
+    /// The UDP socket address to listen for cluster connections from other FoxMQ brokers.
+    #[clap(short = 'C', long, default_value = "0.0.0.0:19793")]
+    pub cluster_addr: SocketAddr,
 
     #[command(flatten)]
     pub auth_config: AuthConfig,
@@ -34,7 +37,8 @@ pub struct RunArgs {
     #[command(flatten)]
     pub tls_config: TlsConfig,
 
-    #[clap(default_value = "dmq/")]
+    /// The directory containing `address-book.toml` and (optionally) `users.toml`.
+    #[clap(default_value = "foxmq.d/")]
     pub config_dir: PathBuf,
 }
 
@@ -52,14 +56,17 @@ pub struct SecretKeyOpt {
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct TlsConfig {
+    /// Enable listening for MQTT-over-TLS connections on a separate port (8883 by default).
     #[clap(long)]
-    pub disable_tls: bool,
+    pub mqtts: bool,
 
+    /// The TCP socket address to listen for MQTT-over-TLS (`mmqts`) connections from clients.
     #[clap(long, default_value = "0.0.0.0:8883")]
-    pub mqtt_tls_listen_addr: SocketAddr,
+    pub mqtts_addr: SocketAddr,
 
+    /// The domain name to report for Server Name Identification (SNI) in TLS.
     #[clap(long, default_value = "foxmq.local")]
-    pub dns_name: String,
+    pub server_name: String,
 
     /// Override the secret key used for TLS handshakes.
     ///
@@ -104,7 +111,7 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
     if users.by_username.is_empty() && !users.auth.allow_anonymous_login {
         let command = std::env::args()
             .next()
-            .unwrap_or_else(|| "tashi-message-queue".to_string());
+            .unwrap_or_else(|| "foxmq".to_string());
 
         eyre::bail!(
             "Broker will be impossible to use in current configuration; \
@@ -121,9 +128,11 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
     let tce_config = create_tce_config(secret_key.clone(), &addresses)
         .wrap_err("error initializing TCE config")?;
 
-    let tls_config = (!args.tls_config.disable_tls)
+    let tls_config = args
+        .tls_config
+        .mqtts
         .then(|| {
-            let tls_socket_addr = args.tls_config.mqtt_tls_listen_addr;
+            let tls_socket_addr = args.tls_config.mqtts_addr;
 
             let key = if let Some(secret_key_file) = &args.tls_config.tls_key_file {
                 read_secret_key(secret_key_file)?
@@ -147,7 +156,7 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
                 vec![tashi_consensus_engine::Certificate::generate_self_signed(
                     &key,
                     tls_socket_addr,
-                    &args.tls_config.dns_name,
+                    &args.tls_config.server_name,
                     None,
                 )?
                 .into_rustls()]
@@ -174,14 +183,14 @@ async fn main_async(
 ) -> crate::Result<()> {
     let (tce_platform, tce_message_stream) = Platform::start(
         tce_config,
-        QuicSocket::bind_udp(args.tce_listen_addr).await?,
+        QuicSocket::bind_udp(args.cluster_addr).await?,
         false,
     )?;
 
     let tce_platform = Arc::new(tce_platform);
 
     let mut broker = MqttBroker::bind(
-        args.mqtt_listen_addr,
+        args.mqtt_addr,
         tls_config,
         users,
         tce_platform.clone(),

@@ -14,7 +14,7 @@ const DEFAULT_PASSWORD_LEN: usize = 12;
 
 const PASSWORD_CHARS: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%-+";
 
-const DEFAULT_OUTPUT_FILE: &str = "dmq/users.toml";
+const DEFAULT_OUTPUT_FILE: &str = "foxmq.d/users.toml";
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct UserArgs {
@@ -53,7 +53,7 @@ struct AddUserArgs {
     /// The file to write the generated user record to.
     ///
     /// If any parent directories in the path do not already exist, they will be created.
-    #[clap(long, short = 'O', default_value = "dmq/users.toml")]
+    #[clap(long, short = 'O', default_value = "foxmq.d/users.toml")]
     output_file: Option<PathBuf>,
 
     /// Controls how this command writes to `--output-file`.

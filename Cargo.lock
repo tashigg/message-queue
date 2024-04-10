@@ -552,6 +552,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "foxmq"
+version = "0.1.0"
+dependencies = [
+ "arbitrary",
+ "argon2",
+ "bytes",
+ "clap",
+ "color-eyre",
+ "der",
+ "dialoguer",
+ "dotenvy",
+ "expect-test",
+ "futures",
+ "hex",
+ "num_enum",
+ "rand",
+ "rumqttd-protocol",
+ "rustls-pemfile",
+ "serde",
+ "slotmap",
+ "tashi-collections",
+ "tashi-consensus-engine",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "triomphe",
+]
+
+[[package]]
+name = "foxmq-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "bytes",
+ "foxmq",
+ "libfuzzer-sys",
+ "quinn-proto",
+ "rumqttd-protocol",
+]
+
+[[package]]
 name = "futures"
 version = "0.3.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1761,51 +1806,6 @@ dependencies = [
  "uuid",
  "windows-sys 0.48.0",
  "x509-cert",
-]
-
-[[package]]
-name = "tashi-message-queue"
-version = "0.1.0"
-dependencies = [
- "arbitrary",
- "argon2",
- "bytes",
- "clap",
- "color-eyre",
- "der",
- "dialoguer",
- "dotenvy",
- "expect-test",
- "futures",
- "hex",
- "num_enum",
- "rand",
- "rumqttd-protocol",
- "rustls-pemfile",
- "serde",
- "slotmap",
- "tashi-collections",
- "tashi-consensus-engine",
- "thiserror",
- "tokio",
- "tokio-rustls",
- "tokio-util",
- "toml",
- "tracing",
- "tracing-subscriber",
- "triomphe",
-]
-
-[[package]]
-name = "tashi-message-queue-fuzz"
-version = "0.0.0"
-dependencies = [
- "arbitrary",
- "bytes",
- "libfuzzer-sys",
- "quinn-proto",
- "rumqttd-protocol",
- "tashi-message-queue",
 ]
 
 [[package]]
