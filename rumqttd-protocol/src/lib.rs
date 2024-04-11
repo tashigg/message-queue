@@ -1,6 +1,4 @@
-//! Source re-exports from the `rumqttd` crate to bypass coherence.
-//!
-//! If the files don't exist or are outdated, try `git submodule update --init --recursive`.
+//! Source copy of the `rumqttd` crate with modifications for our purposes.
 //!
 //! Docs (for public items, anyway): https://docs.rs/rumqttd/latest/rumqttd/index.html
 //!
