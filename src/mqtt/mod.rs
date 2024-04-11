@@ -18,9 +18,11 @@ mod publish;
 
 mod router;
 
+mod keep_alive;
 mod packets;
 
 pub use client_id::ClientId;
+pub use keep_alive::KeepAlive;
 
 slotmap::new_key_type! {
     struct ConnectionId;

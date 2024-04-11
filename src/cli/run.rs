@@ -13,6 +13,7 @@ use crate::config;
 use crate::config::addresses::Addresses;
 use crate::config::users::{AuthConfig, UsersConfig};
 use crate::mqtt::broker::{self, MqttBroker};
+use crate::mqtt::KeepAlive;
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct RunArgs {
@@ -27,6 +28,20 @@ pub struct RunArgs {
     /// The UDP socket address to listen for cluster connections from other FoxMQ brokers.
     #[clap(short = 'C', long, default_value = "0.0.0.0:19793")]
     pub cluster_addr: SocketAddr,
+
+    /// Set the maximum Keep Alive interval for MQTT connections, in seconds.
+    ///
+    /// A client may specify a nonzero interval smaller than this.
+    /// This also becomes the default Keep Alive interval if a client does not specify one.
+    ///
+    /// Per the specification, the connection times out if the client does not send any
+    /// MQTT control packet in 1.5x the Keep Alive interval.
+    ///
+    /// Set to 0 to allow the client to set any Keep Alive interval, including 0 (no timeout).
+    ///
+    /// The maximum value allowed by the MQTT spec is 65,535, or 18 hours, 12 minutes, and 15 seconds.
+    #[clap(long, default_value = "3600")]
+    pub max_keep_alive: u16,
 
     #[command(flatten)]
     pub auth_config: AuthConfig,
@@ -195,6 +210,7 @@ async fn main_async(
         users,
         tce_platform.clone(),
         tce_message_stream,
+        KeepAlive::from_seconds(args.max_keep_alive),
     )
     .await?;
 

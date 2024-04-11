@@ -9,7 +9,9 @@ use crate::tce_message::{Transaction, TransactionData};
 use bytes::BytesMut;
 
 use crate::mqtt::mailbox::OpenMailbox;
+use crate::mqtt::KeepAlive;
 use der::Encode;
+use futures::future::OptionFuture;
 use protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
     DisconnectReasonCode, Packet, PingResp, Protocol, PubAck, PubAckReason, PubRec, PubRecReason,
@@ -20,18 +22,26 @@ use rumqttd_protocol as protocol;
 use rumqttd_protocol::{PubComp, PubCompReason, PubRel, PubRelReason};
 use std::fmt::Display;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{cmp, io, iter};
 use tashi_collections::FnvHashMap;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::oneshot;
+use tokio::time::{Instant, Sleep};
 use tokio_util::sync::CancellationToken;
 
 // TODO: make this configurable
 /// Default value for the Receive Maximum we send to the client,
 /// as well as the send quota we apply to outgoing traffic.
 const DEFAULT_RECEIVE_MAXIMUM: u16 = 1024;
+
+/// Default read timeout while waiting for the `CONNECT` packet.
+///
+/// Shorter than `max_keep_alive` because otherwise it opens us up to a DoS attack.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct Connection<S: AsyncRead + AsyncWrite> {
     id: ConnectionId,
@@ -40,11 +50,16 @@ pub struct Connection<S: AsyncRead + AsyncWrite> {
 
     client_id: Option<ClientId>,
     client_index: Option<ClientIndex>,
+    keep_alive: KeepAlive,
 
     protocol: protocol::v5::V5,
     stream: S,
     read_buf: BytesMut,
     write_buf: BytesMut,
+
+    // Cache the `Sleep` instance for the read timeout to avoid the overhead of re-registering it
+    // every time `recv()` is cancelled due to the `select!{}` in `run()`.
+    read_timeout: Option<Pin<Box<Sleep>>>,
 
     token: CancellationToken,
     shared: Arc<Shared>,
@@ -116,10 +131,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             remote_addr,
             client_id: None,
             client_index: None,
+            keep_alive: KeepAlive::default(),
             protocol: protocol::v5::V5,
             stream,
             read_buf: BytesMut::with_capacity(8192),
             write_buf: BytesMut::with_capacity(8192),
+            read_timeout: Some(Box::pin(tokio::time::sleep(CONNECT_TIMEOUT))),
             token,
             shared,
             client_topic_aliases: FnvHashMap::default(),
@@ -444,8 +461,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
         tracing::trace!(?packet, "received");
 
-        // TODO: disallow zero keep alive
-
         // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901059
         let client_id = match ClientId::from_str(&connect.client_id) {
             Ok(client_id) => Some(client_id),
@@ -492,6 +507,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
             return Ok(None);
         }
+
+        let requested_keep_alive = KeepAlive::from_seconds(connect.keep_alive);
+        self.keep_alive = requested_keep_alive.with_max(self.shared.max_keep_alive);
+        self.reset_read_timeout();
 
         // we have to check the `last_will` for validity (if it even exists).
         store.session.last_will = match last_will
@@ -592,6 +611,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                 // TODO: support retained messages
                 retain_available: Some(0),
                 topic_alias_max: Some(TOPIC_ALIAS_MAX),
+                server_keep_alive: (requested_keep_alive != self.keep_alive)
+                    .then(|| self.keep_alive.as_seconds()),
                 ..Default::default()
             }),
         ))
@@ -908,6 +929,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             let mut read_len = match self.protocol.read_mut(&mut self.read_buf, usize::MAX) {
                 Ok(packet) => {
                     tracing::trace!(?packet, "received");
+                    // Don't reset the read timeout until a full packet has been read.
+                    // That way a malicious connection can't kill time
+                    // by sending one byte per timeout period.
+                    self.reset_read_timeout();
                     return Ok(Some(packet));
                 }
                 Err(protocol::Error::InsufficientBytes(expected)) => expected,
@@ -915,6 +940,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                     return Err(e.into());
                 }
             };
+
+            let mut read_timeout: OptionFuture<_> = self.read_timeout.as_mut().into();
 
             while read_len > 0 {
                 tokio::select! {
@@ -928,6 +955,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
                         read_len = read_len.saturating_sub(read);
                     }
+                    _ = &mut read_timeout => {
+                        tracing::debug!("Read timeout");
+                        return Ok(None);
+                    }
                     _ = self.token.cancelled() => {
                         return Ok(None);
                     }
@@ -936,10 +967,25 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         }
     }
 
+    fn reset_read_timeout(&mut self) {
+        if let Some(timeout) = self.keep_alive.as_timeout() {
+            if let Some(sleep) = &mut self.read_timeout {
+                sleep.as_mut().reset(Instant::now() + timeout);
+            } else {
+                self.read_timeout = Some(Box::pin(tokio::time::sleep(timeout)));
+            }
+        } else {
+            self.read_timeout = None;
+        }
+    }
+
     async fn send(&mut self, packet: Packet) -> Result<ConnectionStatus, ConnectionError> {
         tracing::trace!(?packet, "sending");
 
         self.protocol.write(packet, &mut self.write_buf)?;
+
+        let write_timeout: OptionFuture<_> =
+            self.keep_alive.as_timeout().map(tokio::time::sleep).into();
 
         tokio::select! {
             // TODO: we don't necessarily have to wait for the whole buffer to be flushed,
@@ -947,6 +993,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             res = self.stream.write_all_buf(&mut self.write_buf) => {
                 res.map_err(ConnectionError::WriteError)?;
                 Ok(ConnectionStatus::Running)
+            }
+            _ = write_timeout => {
+                tracing::debug!("Write timeout");
+                Ok(ConnectionStatus::Closed)
             }
             _ = self.token.cancelled() => {
                 Ok(ConnectionStatus::Closed)
