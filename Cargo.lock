@@ -568,7 +568,7 @@ dependencies = [
  "hex",
  "num_enum",
  "rand",
- "rumqttd-protocol",
+ "rumqttd",
  "rustls-pemfile",
  "serde",
  "slotmap",
@@ -593,7 +593,7 @@ dependencies = [
  "foxmq",
  "libfuzzer-sys",
  "quinn-proto",
- "rumqttd-protocol",
+ "rumqttd",
 ]
 
 [[package]]
@@ -1399,8 +1399,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "rumqttd-protocol"
-version = "0.1.0"
+name = "rumqttd"
+version = "0.19.0"
 dependencies = [
  "bytes",
  "thiserror",

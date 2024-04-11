@@ -1,8 +1,11 @@
 [package]
-name = "rumqttd-protocol"
-version = "0.1.0"
+# Note: `name`, `version`, `repository` and `license` should match those of the published `rumqttd` crate
+# so that it's properly attributed when we generate `THIRDPARTY.yml`.
+name = "rumqttd"
+version = "0.19.0"
 edition = "2021"
-
+repository = "https://github.com/bytebeamio/rumqtt"
+license = "Apache-2.0"
 
 [dependencies]
 bytes = { version = "1", features = ["serde"] }

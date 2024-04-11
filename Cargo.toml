@@ -2,7 +2,8 @@
 members = [".", "rumqttd-protocol", "fuzz"]
 
 [workspace.dependencies]
-rumqttd-protocol = { path = "rumqttd-protocol" }
+# Rename our in-tree copy of `rumqttd` to prevent confusion with the published crate.
+rumqttd-protocol = { path = "rumqttd-protocol", package = "rumqttd" }
 
 [package]
 name = "foxmq"
