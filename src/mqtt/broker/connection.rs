@@ -461,6 +461,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
         tracing::trace!(?packet, "received");
 
+        if connect_properties.as_ref().is_some_and(|props| {
+            props.authentication_method.is_some() || props.authentication_data.is_some()
+        }) {
+            self.disconnect_on_connect_error(
+                ConnectReturnCode::BadAuthenticationMethod,
+                "unsupported authentication method",
+            )
+            .await?;
+            return Ok(None);
+        }
+
         // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901059
         let client_id = match ClientId::from_str(&connect.client_id) {
             Ok(client_id) => Some(client_id),
