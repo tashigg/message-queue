@@ -22,6 +22,7 @@ use connection::Connection;
 use crate::config::users::UsersConfig;
 use crate::mqtt::router::{system_publish, MqttRouter, RouterHandle};
 use crate::mqtt::session::{InactiveSessions, SessionStore};
+use crate::mqtt::KeepAlive;
 use crate::mqtt::{client_id, ClientId, ClientIndex, ConnectionId};
 use crate::password::PasswordHashingPool;
 use crate::tce_message::{TimestampSeconds, Transaction, TransactionData};
@@ -134,6 +135,8 @@ struct Shared {
     broker_tx: mpsc::Sender<BrokerEvent>,
     tce_platform: Arc<Platform>,
     router: RouterHandle,
+
+    max_keep_alive: KeepAlive,
 }
 
 struct ConnectionData {
@@ -156,6 +159,7 @@ impl MqttBroker {
         users: UsersConfig,
         tce_platform: Arc<Platform>,
         tce_messages: MessageStream,
+        max_keep_alive: KeepAlive,
     ) -> crate::Result<Self> {
         let listener = TcpListener::bind(listen_addr)
             .await
@@ -208,6 +212,7 @@ impl MqttBroker {
                 broker_tx: broker_tx.clone(),
                 tce_platform,
                 router: router.handle(),
+                max_keep_alive,
             }),
             broker_rx,
             inactive_sessions: Default::default(),
