@@ -319,6 +319,13 @@ impl MqttBroker {
 
                 let connection_id = self.connections.insert(());
 
+                // Disable Nagle's algorithm since we always send complete packets.
+                // https://en.wikipedia.org/wiki/Nagle's_algorithm
+                if let Err(e) = stream.set_nodelay(true) {
+                    // It's unclear how this could actually fail and what it means when it does.
+                    tracing::debug!(?e, "error setting TCP_NODELAY on socket");
+                }
+
                 let conn = Connection::new(
                     connection_id,
                     stream,
@@ -338,6 +345,13 @@ impl MqttBroker {
         match result {
             Ok((stream, remote_addr)) => {
                 tracing::info!(%remote_addr, "connection received");
+
+                // Disable Nagle's algorithm since we always send complete packets.
+                // https://en.wikipedia.org/wiki/Nagle's_algorithm
+                if let Err(e) = stream.set_nodelay(true) {
+                    // It's unclear how this could actually fail and what it means when it does.
+                    tracing::debug!(?e, "error setting TCP_NODELAY on socket");
+                }
 
                 let stream = self
                     .tls
