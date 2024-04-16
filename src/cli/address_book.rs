@@ -22,10 +22,10 @@ pub struct AddressBookArgs {
 struct Common {
     /// The path to write the address book and key PEM files to.
     ///
-    /// Will be created if it doesn't already exist.
+    /// It and any parents will be created if it doesn't already exist.
     ///
     /// An error will be returned if the directory already contains an `address-book.toml` or
-    /// any `key_*.pem` files.
+    /// any conflicting `key_*.pem` files.
     ///
     /// Pass `-f`/`--force` to overwrite any existing files.
     #[clap(long, short = 'O', default_value = "foxmq.d/")]
@@ -35,6 +35,7 @@ struct Common {
     #[clap(long, short = 'f')]
     force: bool,
 
+    /// Set the format of log output.
     #[clap(short, long, default_value = "full")]
     log: LogFormat,
 }
@@ -43,12 +44,15 @@ struct Common {
 #[clap(rename_all = "kebab-case")]
 enum AddressBookCommand {
     /// Generate the address book from a list of predetermined socket addresses.
+    ///
+    /// These socket addresses correspond to the --cluster-addr of each node,
+    /// or a socket address that connects to it if using `0.0.0.0`.
     FromList {
         // Needs to be part of the subcommand arguments to parse after the subcommand
         #[clap(flatten)]
         common: Common,
 
-        /// The list of socket addresses (IP:port) to include in the address book.
+        /// The list of UDP socket addresses (IP:port) to include in the address book.
         ///
         /// An error will be returned if the same address is listed more than once.
         #[clap(required = true)]
@@ -64,9 +68,9 @@ enum AddressBookCommand {
 
         /// The base IP address which will be affixed with ports in the given range.
         base_address: IpAddr,
-        /// The start of the port range (inclusive).
+        /// The start of the UDP port range (inclusive).
         port_start: u16,
-        /// The end of the port range (inclusive).
+        /// The end of the UDP port range (inclusive).
         port_end: u16,
     },
 }
