@@ -19,9 +19,9 @@ pub struct Args {
 
 #[derive(clap::Subcommand, Clone, Debug)]
 pub enum Command {
-    /// Start the message broker and connect to a TCE network.
+    /// Start the message broker and connect to a FoxMQ cluster.
     Run(RunArgs),
-    /// Generate an address book file and set of private keys for a dMQ session.
+    /// Generate an address book file and set of private keys for a FoxMQ session.
     ///
     /// The command takes as an input some set of socket addresses,
     /// either from a given list (`from-list`)
@@ -39,9 +39,13 @@ pub enum Command {
 
 #[derive(clap::ValueEnum, Debug, Copy, Clone)]
 pub enum LogFormat {
+    /// Emit human-readable single line logs for each event.
     Full,
+    /// A variant of full, optimized for shorter line lengths.
     Compact,
+    /// Format events in multi-line very "prettified" form.
     Pretty,
+    /// Emit JSON-lines formatted events.
     Json,
 }
 

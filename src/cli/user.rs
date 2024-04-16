@@ -34,6 +34,7 @@ enum UserCommand {
     ///
     /// If a password is not provided, it will be read from the first line piped to stdin.
     Generate {
+        /// Set the format of log output.
         #[clap(short, long, default_value = "full")]
         log: LogFormat,
 
@@ -49,6 +50,7 @@ enum UserCommand {
 
 #[derive(clap::Args, Clone, Debug)]
 struct AddUserArgs {
+    /// Set the format of log output.
     #[clap(short, long, default_value = "full")]
     log: LogFormat,
 

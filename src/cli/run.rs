@@ -17,6 +17,7 @@ use crate::mqtt::KeepAlive;
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct RunArgs {
+    /// Set the format of log output.
     #[clap(short, long, default_value = "full")]
     pub log: LogFormat,
 
@@ -60,18 +61,21 @@ pub struct RunArgs {
 #[derive(clap::Args, Debug, Clone)]
 #[group(required = true, multiple = false)]
 pub struct SecretKeyOpt {
-    /// Read a P-256 secret key from hex-encoded DER bytes.
+    /// Read the P-256 secret key used to identify this broker in the cluster from hex encoded DER.
+    ///
+    /// If `--tls-key-file` is not provided and `--mqtts` is enabled,
+    /// this or `--secret-key-file` will be used by default.
     #[clap(short = 'k', long, env)]
     pub secret_key: Option<String>,
 
-    /// Read a P-256 secret key from a PEM-encoded file.
+    /// Read the PEM-encoded P-256 secret key used to identify this broker in the cluster from a file.
     #[clap(short = 'f', long, env)]
     pub secret_key_file: Option<PathBuf>,
 }
 
 #[derive(clap::Args, Debug, Clone)]
 pub struct TlsConfig {
-    /// Enable listening for MQTT-over-TLS connections on a separate port (8883 by default).
+    /// Enable listening for MQTT-over-TLS connections on a separate socket (0.0.0.0:8883 by default).
     #[clap(long)]
     pub mqtts: bool,
 
