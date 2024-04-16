@@ -4,7 +4,8 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use color_eyre::eyre::WrapErr;
-use rand::seq::IteratorRandom;
+use rand::distributions::Uniform;
+use rand::Rng;
 use tashi_collections::HashMap;
 
 use crate::cli::LogFormat;
@@ -12,6 +13,7 @@ use crate::config::users::{AuthConfig, User, UsersConfig};
 
 const DEFAULT_PASSWORD_LEN: usize = 12;
 
+// NOTE: password generation will break if multibyte characters are added!
 const PASSWORD_CHARS: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%-+";
 
 const DEFAULT_OUTPUT_FILE: &str = "foxmq.d/users.toml";
@@ -154,11 +156,7 @@ fn add_user_interactively(args: AddUserArgs) -> crate::Result<()> {
                     .default(DEFAULT_PASSWORD_LEN)
                     .interact_on(&term)?;
 
-                password.extend(
-                    PASSWORD_CHARS
-                        .chars()
-                        .choose_multiple(&mut rand::thread_rng(), password_len),
-                );
+                password = generate_password(password_len);
 
                 format!("Enter generated password {password:?} to confirm (note: this line will be erased from the console)")
             } else {
@@ -253,4 +251,24 @@ fn generate_user_record(
     output.write_all(users_toml.as_bytes())?;
 
     Ok(())
+}
+
+fn generate_password(len: usize) -> String {
+    rand::thread_rng()
+        .sample_iter(Uniform::new(0, PASSWORD_CHARS.len()))
+        .map(|i| &PASSWORD_CHARS[i..][..1])
+        .take(len)
+        .collect()
+}
+
+#[test]
+fn test_generate_password() {
+    // The previous implementation using `.choose_multiple()` would be unable to duplicate chars
+    // so a password of `PASSWORD_CHARS.len()` would always be the same.
+    for _ in 0..100 {
+        let p1 = generate_password(PASSWORD_CHARS.len());
+        let p2 = generate_password(PASSWORD_CHARS.len());
+
+        assert_ne!(p1, p2);
+    }
 }
