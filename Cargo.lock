@@ -1765,7 +1765,7 @@ dependencies = [
 [[package]]
 name = "tashi-collections"
 version = "0.3.0"
-source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=32215867b8d024227f3944ddec296673a4065ada#32215867b8d024227f3944ddec296673a4065ada"
+source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=1eee142878381bea9fb8660a509b88d571152ebc#1eee142878381bea9fb8660a509b88d571152ebc"
 dependencies = [
  "fnv",
  "hashbrown",
@@ -1774,7 +1774,7 @@ dependencies = [
 [[package]]
 name = "tashi-consensus-engine"
 version = "0.3.0"
-source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=32215867b8d024227f3944ddec296673a4065ada#32215867b8d024227f3944ddec296673a4065ada"
+source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=1eee142878381bea9fb8660a509b88d571152ebc#1eee142878381bea9fb8660a509b88d571152ebc"
 dependencies = [
  "backoff",
  "bytes",
