@@ -40,7 +40,8 @@ describe("publish to node 1, receive from node2", () => {
 
         client2.reconnect();
 
-        const messages = [];
+        const unorderedMessages = [];
+        const orderedMessages = [];
 
         await new Promise((resolver) => {
             client2.on("message", async (topic, message, packet) => {
@@ -48,7 +49,11 @@ describe("publish to node 1, receive from node2", () => {
 
                 console.log(topic.toString() + " message received: " + messageStr);
 
-                messages.push({topic, message: messageStr, qos: packet.qos});
+                if (packet.qos === 0) {
+                    unorderedMessages.push({topic, message: messageStr, qos: packet.qos});
+                } else {
+                    orderedMessages.push({topic, message: messageStr, qos: packet.qos});
+                }
 
                 if (messageStr === "rainy") {
                     resolver();
@@ -59,19 +64,22 @@ describe("publish to node 1, receive from node2", () => {
         await client1.endAsync();
         await client2.endAsync();
 
-        // Depending on when the QoS 0 message gets through TCE, it may or may not get delivered.
-        if (messages.length === 2) {
-            expect(messages).toEqual([
-                {topic: "weather/sacramento", message: "cloudy", qos: 1},
-                {topic: "weather/sacramento", message: "rainy", qos: 2},
-            ]);
+        // QoS 0 messages are not guaranteed to be in order with QoS 1 and 2 messages,
+        // and that's how FoxMQ treats them.
+        //
+        // Depending on the order that things actually happen, the QoS 0 message may not get delivered.
+        if (unorderedMessages.length === 1) {
+            expect(unorderedMessages).toEqual([
+                {topic: "weather/sacramento", message: "sunny", qos: 0}
+            ])
         } else {
-            expect(messages).toEqual([
-                {topic: "weather/sacramento", message: "sunny", qos: 0},
-                {topic: "weather/sacramento", message: "cloudy", qos: 1},
-                {topic: "weather/sacramento", message: "rainy", qos: 2},
-            ]);
+            expect(unorderedMessages).toEqual([]);
         }
+
+        expect(orderedMessages).toEqual([
+            {topic: "weather/sacramento", message: "cloudy", qos: 1},
+            {topic: "weather/sacramento", message: "rainy", qos: 2},
+        ]);
     });
 
     test("synchronously, over TLS", async () => {
