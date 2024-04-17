@@ -253,7 +253,9 @@ fn create_tce_config(
     Ok(tashi_consensus_engine::Config::new(secret_key)
         .initial_nodes(nodes)
         .use_alpn(true)
-        .report_events_before_consensus(true)
+        // TODO: we can dispatch messages before they come to consensus
+        // but we need to make sure we don't duplicate PUBLISHes.
+        // .report_events_before_consensus(true)
         // Since a FoxMQ cluster is permissioned, don't kick failed nodes which may later recover.
         .fallen_behind_kick_seconds(None))
 }
