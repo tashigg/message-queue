@@ -22,7 +22,13 @@ services:
     environment: &broker_env
       RUST_LOG: tashi_consensus_engine=warn,foxmq=trace
     entrypoint: target/release/foxmq
-    command: run --secret-key-file foxmq.d/key_0.pem --tls-cert-file=foxmq.d/key_0.crt --dns-name broker1.example.com /home/message-queue/foxmq.d
+    command: > # Folds newlines so we don't have to escape them in the command itself.
+      run
+      --mqtts
+      --secret-key-file foxmq.d/key_0.pem
+      --tls-cert-file=foxmq.d/key_0.crt
+      --server-name broker1.example.com
+      /home/message-queue/foxmq.d
 
   broker2:
     container_name: broker2
@@ -40,7 +46,13 @@ services:
           - broker2.example.com
     environment: *broker_env
     entrypoint: target/release/foxmq
-    command: run --secret-key-file foxmq.d/key_1.pem --tls-cert-file=foxmq.d/key_1.crt --dns-name broker2.example.com /home/message-queue/foxmq.d
+    command: >
+      run
+      --mqtts
+      --secret-key-file foxmq.d/key_1.pem
+      --tls-cert-file=foxmq.d/key_1.crt
+      --server-name broker2.example.com
+      /home/message-queue/foxmq.d
 
 networks:
   mesh-app-bridge:

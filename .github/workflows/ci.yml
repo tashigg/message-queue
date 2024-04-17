@@ -142,8 +142,6 @@ jobs:
         run: ./run.sh
 
       - name: Smoke test
-        # We expect tests to fail for now
-        continue-on-error: true
         # May stall on some checks; keep trucking with the rest of the tests.
         timeout-minutes: 5
         run: |
@@ -159,8 +157,6 @@ jobs:
           nvm install ${NODE_VERSION}
 
       - name: System tests
-        # We expect tests to fail for now
-        continue-on-error: true
         run: |
           . ~/.nvm/nvm.sh
           nvm use ${NODE_VERSION}
