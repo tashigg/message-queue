@@ -252,7 +252,10 @@ fn create_tce_config(
 
     Ok(tashi_consensus_engine::Config::new(secret_key)
         .initial_nodes(nodes)
-        .report_events_before_consensus())
+        .use_alpn(true)
+        .report_events_before_consensus(true)
+        // Since a FoxMQ cluster is permissioned, don't kick failed nodes which may later recover.
+        .fallen_behind_kick_seconds(None))
 }
 
 /// NOTE: uses blocking I/O internally.
