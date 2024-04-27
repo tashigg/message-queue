@@ -21,6 +21,7 @@ use rumqttd_protocol::{QoS, RetainForwardRule, SubscribeReasonCode, UnsubAckReas
 use crate::map_join_error;
 use crate::mqtt::mailbox::MailSender;
 use crate::mqtt::packets::PacketId;
+use crate::mqtt::retain::RetainedMessages;
 use crate::mqtt::trie::{self, Filter, FilterTrie, TopicName};
 use crate::mqtt::{ClientId, ClientIndex, ConnectionId};
 use crate::tce_message::{
@@ -80,6 +81,7 @@ impl MqttRouter {
             clients: SecondaryMap::new(),
             dead_clients: HashSet::default(),
             subscriptions: Subscriptions::default(),
+            retained_messages: RetainedMessages::default(),
             command_rx,
             system_rx,
             tce_platform,
@@ -327,6 +329,8 @@ struct RouterState {
     subscriptions: Subscriptions,
     command_rx: mpsc::Receiver<(ClientIndex, RouterCommand)>,
     system_rx: mpsc::UnboundedReceiver<SystemCommand>,
+
+    retained_messages: RetainedMessages,
 
     tce_platform: Arc<Platform>,
     tce_messages: MessageStream,
@@ -576,7 +580,7 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
         }
         RouterCommand::Transaction(txn) => match txn.data {
             TransactionData::Publish(publish) => {
-                dispatch(state, publish, PublishOrigin::Local(client_idx))
+                dispatch(state, publish.into(), PublishOrigin::Local(client_idx))
             }
         },
         RouterCommand::Subscribe {
@@ -674,6 +678,7 @@ fn handle_message(state: &mut RouterState, message: Message) {
     match message {
         Message::SyncPoint(sync_point) => {
             // TODO: handle sync points
+            // TODO: serialize retained messages [TG-492]
             tracing::debug!(?sync_point, "received sync point");
         }
         Message::Event(event) => {
@@ -684,6 +689,10 @@ fn handle_message(state: &mut RouterState, message: Message) {
 
 #[tracing::instrument(skip_all, fields(creator=%event.creator, timestamp=event.timestamp_created()))]
 fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
+    let Some(consensus_timestamp) = event.timestamp_finalized else {
+        return;
+    };
+
     // Way too noisy if we don't filter this.
     if !event.application_transactions().is_empty() {
         tracing::trace!(
@@ -692,21 +701,37 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
         );
     }
 
-    if &event.creator == state.tce_platform.creator_id() {
-        // TODO: we'll want to check if our own events are coming to consensus for QoS 1 and 2
-        // and re-send them if not.
-        //
-        // For dispatching local messages, expect them to come down the `command_tx` channel.
-        // That will save us having to redundantly decode them.
-        return;
-    }
+    // TODO: we'll want to check if our own events are coming to consensus for QoS 1 and 2
+    // and re-send them if not.
 
     for (idx, transaction) in event.application_transactions().iter().enumerate() {
         match Transaction::from_der(transaction.as_bytes()) {
             Ok(Transaction {
                 data: TransactionData::Publish(publish),
             }) => {
-                dispatch(state, publish, PublishOrigin::Consensus(&event.creator));
+                let publish = Arc::new(publish);
+
+                if &event.creator != state.tce_platform.creator_id() {
+                    // Locally sent messages would have been dispatched directly
+                    dispatch(
+                        state,
+                        publish.clone(),
+                        PublishOrigin::Consensus(&event.creator),
+                    );
+                }
+
+                // Only for TCE messages because we need to have total ordering
+                // to know which retained message is the latest for a given topic.
+                if publish.meta.retain() {
+                    if !publish.payload.0.is_empty() {
+                        state
+                            .retained_messages
+                            .insert(consensus_timestamp, idx, publish);
+                    } else {
+                        // Empty payload means clear the retained message.
+                        state.retained_messages.remove(&publish.topic);
+                    }
+                }
             }
             Err(e) => {
                 // This isn't a fatal error.
@@ -738,15 +763,15 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
                 }
             }
         }
+
         SystemCommand::Publish { source, txn } => {
-            dispatch(state, txn, PublishOrigin::System { source });
+            dispatch(state, txn.into(), PublishOrigin::System { source });
         }
 
-        //
         SystemCommand::PublishWill {
             txn,
             willing_client,
-        } => dispatch(state, txn, PublishOrigin::Local(willing_client)),
+        } => dispatch(state, txn.into(), PublishOrigin::Local(willing_client)),
 
         SystemCommand::EvictClient { client_index } => {
             state.evict_client(client_index);
@@ -754,12 +779,10 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
     }
 }
 
-fn dispatch(state: &mut RouterState, publish: PublishTrasaction, origin: PublishOrigin<'_>) {
-    // Wrap in `Arc` for cheap clones.
-    // This is a potential candidate for `triomphe::Arc` but `PublishTransaction` is so large
-    // that it dwarfs the extra machine word for the weak count, and it's relatively short-lived.
-    let publish = Arc::new(publish);
-
+// `PublishTransaction` wrapped in `Arc` for cheap clones.
+// This is a potential candidate for `triomphe::Arc` but `PublishTransaction` is so large
+// that it dwarfs the extra machine word for the weak count.
+fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: PublishOrigin<'_>) {
     // TODO: statically ensure `topic` is valid in `PublishTransaction`
     let topic = match TopicName::parse(&publish.topic) {
         Ok(topic) => topic,

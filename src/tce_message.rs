@@ -21,7 +21,7 @@ pub enum TransactionData {
 
 // Transcoding to DER was chosen so that we are not baking-in a specific version of the MQTT protocol.
 /// DER mapping of [`rumqttd::protocol::Packet::Publish`].
-#[derive(der::Sequence, Debug)]
+#[derive(der::Sequence, Debug, PartialEq, Eq)]
 pub struct PublishTrasaction {
     pub topic: String,
     pub meta: PublishMeta,
@@ -43,7 +43,7 @@ pub struct PublishTrasaction {
 ///
 /// `topic_alias` and `subscription_identifiers` are omitted as they are only used between
 /// a client and a broker.
-#[derive(der::Sequence, Debug)]
+#[derive(der::Sequence, Debug, PartialEq, Eq)]
 pub struct PublishTransactionProperties {
     // Note: these match the tag bytes used by the MQTT protocol, where possible.
     #[asn1(context_specific = "1", optional = "true")]
@@ -220,7 +220,7 @@ impl Debug for PublishMeta {
 
 // FIXME: remove when `der 0.8.0` is released:
 // https://github.com/RustCrypto/formats/issues/1356#issuecomment-1956225669
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BytesAsOctetString(pub Bytes);
 
 impl der::FixedTag for BytesAsOctetString {

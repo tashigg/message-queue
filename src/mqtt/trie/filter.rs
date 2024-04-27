@@ -85,6 +85,38 @@ impl Filter {
     pub fn root_literal(&self) -> Option<&str> {
         self.tokens.first().and_then(FilterToken::as_literal)
     }
+
+    /// Returns `true` if this filter matches the given topic, `false` otherwise.
+    ///
+    /// The topic doesn't need to be well-formed.
+    pub fn matches_topic(&self, topic: &str) -> bool {
+        // Empty topics are not allowed in the spec.
+        if topic.is_empty() {
+            return false;
+        }
+
+        let mut tokens = self.tokens.iter();
+
+        for level in topic.split('/') {
+            match tokens.next() {
+                Some(FilterToken::Literal(s)) => {
+                    if &**s != level {
+                        return false;
+                    }
+                }
+                // A `+` token matches anything at this level.
+                Some(FilterToken::WildPlus) => continue,
+                // There's more levels in the topic than in the filter.
+                // This is only a match if the filter ends with `#` (multi-level wildcard).
+                None => return self.leaf_kind == LeafKind::Any,
+            }
+        }
+        
+        // Require the whole filter to be consumed
+        tokens.next().is_none() 
+            // `foo/#` must not match `foo`
+            && self.leaf_kind == LeafKind::Exact
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -167,5 +199,134 @@ impl<'a> arbitrary::Arbitrary<'a> for LeafKind {
 
     fn size_hint(_depth: usize) -> (usize, Option<usize>) {
         (1, Some(1))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Filter;
+
+    #[test]
+    fn filter_matches() {
+        const TEST_TOPICS: &[&str] = &[
+            "foo",
+            "foo/",
+            "foo/bar",
+            "foo/bar/",
+            "foo/bar/baz",
+            "foo/bar/baz/",
+            "/",
+            "/foo",
+            "/foo/",
+            "/foo/bar",
+            "/foo/bar/",
+            "/foo/bar/baz",
+            "/foo/bar/baz/",
+        ];
+
+        /// Iterate through all the topics in `TEST_TOPICS`
+        /// and assert whether the given filter matches or not.
+        #[track_caller]
+        fn test_filter(filter: &str, matches: &[&str]) {
+            let parsed: Filter = filter
+                .parse()
+                .unwrap_or_else(|e| panic!("filter {filter:?} failed to parse: {e:?}"));
+
+            for topic in TEST_TOPICS {
+                if matches.contains(topic) {
+                    assert!(
+                        parsed.matches_topic(topic),
+                        "filter {filter:?} should match topic {topic:?} but doesn't (expected matches: {matches:?})"
+                    );
+                } else {
+                    assert!(
+                        !parsed.matches_topic(topic),
+                        "filter {filter:?} shouldn't match topic {topic:?} but does  (expected matches: {matches:?})"
+                    );
+                }
+            }
+        }
+
+        // Test exact matches (any topic as a filter should match itself)
+        for &filter in TEST_TOPICS {
+            test_filter(filter, &[filter]);
+        }
+
+        // Single-level wildcards
+        test_filter("+/bar/baz", &["foo/bar/baz"]);
+        test_filter("foo/+/baz", &["foo/bar/baz"]);
+        // `+` should match an empty level created by a trailing `/`
+        test_filter("foo/bar/+", &["foo/bar/", "foo/bar/baz"]);
+
+        test_filter("+/bar/baz/", &["foo/bar/baz/"]);
+        test_filter("foo/+/baz/", &["foo/bar/baz/"]);
+        test_filter("foo/bar/+/", &["foo/bar/baz/"]);
+        test_filter("foo/bar/baz/+", &["foo/bar/baz/"]);
+
+        test_filter("/+/bar/baz", &["/foo/bar/baz"]);
+        test_filter("/foo/+/baz", &["/foo/bar/baz"]);
+        test_filter("/foo/bar/+", &["/foo/bar/", "/foo/bar/baz"]);
+
+        test_filter("/+/bar/baz/", &["/foo/bar/baz/"]);
+        test_filter("/foo/+/baz/", &["/foo/bar/baz/"]);
+        test_filter("/foo/bar/+/", &["/foo/bar/baz/"]);
+        test_filter("/foo/bar/baz/+", &["/foo/bar/baz/"]);
+
+        // Expect fewer levels (potentially surprising behavior with leading `/`)
+        test_filter("+", &["foo"]);
+        test_filter("+/", &["/", "foo/"]);
+        test_filter("foo/+", &["foo/", "foo/bar"]);
+        test_filter("+/+", &["/", "foo/", "/foo", "foo/bar"]);
+        test_filter("+/+/", &["/foo/", "foo/bar/"]);
+        test_filter("foo/+/+", &["foo/bar/", "foo/bar/baz"]);
+        test_filter("+/+/+", &["/foo/", "/foo/bar", "foo/bar/", "foo/bar/baz"]);
+        test_filter("+/+/+/+", &["/foo/bar/", "/foo/bar/baz", "foo/bar/baz/"]);
+
+        test_filter("/+", &["/", "/foo"]);
+        test_filter("/foo/+", &["/foo/", "/foo/bar"]);
+        test_filter("/+/+", &["/foo/", "/foo/bar"]);
+        test_filter("/foo/+/+", &["/foo/bar/", "/foo/bar/baz"]);
+        test_filter("/+/+/+", &["/foo/bar/", "/foo/bar/baz"]);
+        test_filter("/+/+/+/+", &["/foo/bar/baz/"]);
+
+        // Multi-level wildcard
+        test_filter("#", TEST_TOPICS);
+        test_filter(
+            "foo/#",
+            &["foo/", "foo/bar", "foo/bar/", "foo/bar/baz", "foo/bar/baz/"],
+        );
+        test_filter("foo/bar/#", &["foo/bar/", "foo/bar/baz", "foo/bar/baz/"]);
+        test_filter("foo/bar/baz/#", &["foo/bar/baz/"]);
+
+        test_filter(
+            "/#",
+            &[
+                "/",
+                "/foo",
+                "/foo/",
+                "/foo/bar",
+                "/foo/bar/",
+                "/foo/bar/baz",
+                "/foo/bar/baz/",
+            ],
+        );
+
+        test_filter(
+            "/foo/#",
+            &[
+                "/foo/",
+                "/foo/bar",
+                "/foo/bar/",
+                "/foo/bar/baz",
+                "/foo/bar/baz/",
+            ],
+        );
+
+        test_filter(
+            "/foo/bar/#",
+            &["/foo/bar/", "/foo/bar/baz", "/foo/bar/baz/"],
+        );
+
+        test_filter("/foo/bar/baz/#", &["/foo/bar/baz/"]);
     }
 }
