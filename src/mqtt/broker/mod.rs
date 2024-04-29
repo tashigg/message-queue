@@ -254,6 +254,7 @@ impl MqttBroker {
                 Some(Ok(data)) = self.tasks.join_next() => {
                     let conn_id = data.id;
                     if let Some(client_index) = data.client_index {
+                        self.clients.by_index[client_index].connection_id = None;
                         self.router.disconnected(client_index, conn_id);
                     }
 
