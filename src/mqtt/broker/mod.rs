@@ -82,8 +82,14 @@ pub struct MqttBroker {
     // this is a vecdeque just to make it fair, it doesn't really *have* to be one.
     pending_wills: VecDeque<PendingWill>,
 
+    /// Store information about a connection awaiting another connection to exit to take it over.
+    ///
+    /// When `key` closes out, `value` takes over the session immediately,
+    /// if the value is a `clean_session` or the session expires on disconnect, a new session will be created instead.
+    deferred_session_takeovers: HashMap<ConnectionId, SessionTakeover>,
+
     /// Generator for `ConnectionId`s
-    connections: SlotMap<ConnectionId, ()>,
+    connections: SlotMap<ConnectionId, CancellationToken>,
     tasks: JoinSet<ConnectionData>,
 
     shared: Arc<Shared>,
@@ -99,6 +105,14 @@ struct PendingWill {
     client_id: ClientId,
     client_idx: ClientIndex,
     will: Will,
+}
+
+struct SessionTakeover {
+    client_id: ClientId,
+    assigned: bool,
+    client_index: ClientIndex,
+    clean_session: bool,
+    response_tx: oneshot::Sender<ConnectionAcceptedResponse>,
 }
 
 #[derive(Default)]
@@ -202,6 +216,7 @@ impl MqttBroker {
             token,
             clients: Default::default(),
             pending_wills: Default::default(),
+            deferred_session_takeovers: Default::default(),
             connections: SlotMap::with_capacity_and_key(256),
             tasks: JoinSet::new(),
             shared: Arc::new(Shared {
@@ -237,12 +252,17 @@ impl MqttBroker {
                     shutdown = true;
                 }
                 Some(Ok(data)) = self.tasks.join_next() => {
+                    let conn_id = data.id;
                     if let Some(client_index) = data.client_index {
-                        self.router.disconnected(client_index, data.id);
+                        self.router.disconnected(client_index, conn_id);
                     }
 
-                    self.connections.remove(data.id);
+                    self.connections.remove(conn_id);
                     handle_connection_lost(&mut self.inactive_sessions, &mut self.router, &self.shared.tce_platform, data);
+
+                    if let Some(takeover) = self.deferred_session_takeovers.remove(&conn_id) {
+                        self.handle_session_takeover(takeover);
+                    }
                 }
                 res = self.listener.accept() => {
                     self.handle_accept(res);
@@ -317,8 +337,6 @@ impl MqttBroker {
             Ok((stream, remote_addr)) => {
                 tracing::info!(%remote_addr, "connection received");
 
-                let connection_id = self.connections.insert(());
-
                 // Disable Nagle's algorithm since we always send complete packets.
                 // https://en.wikipedia.org/wiki/Nagle's_algorithm
                 if let Err(e) = stream.set_nodelay(true) {
@@ -326,11 +344,14 @@ impl MqttBroker {
                     tracing::debug!(?e, "error setting TCP_NODELAY on socket");
                 }
 
+                let child_token = self.token.child_token();
+                let connection_id = self.connections.insert(child_token.clone());
+
                 let conn = Connection::new(
                     connection_id,
                     stream,
                     remote_addr,
-                    self.token.clone(),
+                    child_token,
                     self.shared.clone(),
                 );
 
@@ -363,13 +384,14 @@ impl MqttBroker {
                     .map_err(|_| todo!())
                     .unwrap();
 
-                let connection_id = self.connections.insert(());
+                let child_token = self.token.child_token();
+                let connection_id = self.connections.insert(child_token.clone());
 
                 let conn = Connection::new(
                     connection_id,
                     stream,
                     remote_addr,
-                    self.token.clone(),
+                    child_token,
                     self.shared.clone(),
                 );
 
@@ -377,6 +399,72 @@ impl MqttBroker {
             }
             // TODO: Some kinds of accept failures are probably fatal
             Err(e) => tracing::error!(?e, "accept failed"),
+        }
+    }
+
+    fn handle_session_takeover(&mut self, takeover: SessionTakeover) {
+        let SessionTakeover {
+            client_id,
+            assigned,
+            client_index,
+            clean_session,
+            response_tx,
+        } = takeover;
+
+        let session = match (clean_session, self.inactive_sessions.claim(&client_id)) {
+            (false, Some(store)) => {
+                tracing::trace!(%client_id, "existing session was resumed");
+                Some(store)
+            }
+            (false, None) => {
+                tracing::trace!(
+                    %client_id,
+                    "client requested to resume session, none was found"
+                );
+                None
+            }
+            (true, Some(mut store)) => {
+                if let Some(last_will) = store.session.last_will.take() {
+                    execute_will(
+                        &mut self.router,
+                        &self.shared.tce_platform,
+                        client_id,
+                        client_index,
+                        last_will,
+                    )
+                }
+
+                tracing::trace!(%client_id, "existing session was dropped");
+                None
+            }
+            (true, None) => {
+                tracing::trace!(%client_id, "starting clean session");
+                None
+            }
+        };
+
+        // The client might have disconnected, closing the channel.
+        if let Err(response) = response_tx.send(ConnectionAcceptedResponse {
+            assigned_client_id: assigned.then_some(client_id),
+            client_index,
+            session,
+        }) {
+            if let Some(store) = response.session {
+                self.inactive_sessions.insert(client_id, store);
+            } else {
+                // Note: a malicious client could theoretically force the version for a slot
+                // to wrap around by connecting and disconnecting a bunch of times.
+                //
+                // While `slotmap` handles this just fine, it could cause us
+                // to leak information about another client that ended up in the same slot
+                // if the version happens to wrap around to one referenced by an old key
+                // somewhere.
+                //
+                // This is unlikely to be feasibly exploitable, however, as long as we
+                // are sure to keep other maps using the same key in-sync. We can also
+                // make this more difficult to manipulate by throttling connection attempts.
+                self.clients.remove(client_index);
+            }
         }
     }
 
@@ -396,66 +484,31 @@ impl MqttBroker {
                     }
                 };
 
-                let session = match (clean_session, self.inactive_sessions.claim(&client_id)) {
-                    (false, Some(mut store)) => {
-                        if let Some(_last_will) = store.session.last_will.take() {
-                            // TODO: last_will_properties
-                            // TODO: submit it
-                        }
-
-                        tracing::trace!(%client_id, "existing session was resumed");
-                        Some(store)
-                    }
-                    (false, None) => {
-                        tracing::trace!(
-                            %client_id,
-                            "client requested to resume session, none was found"
-                        );
-                        None
-                    }
-                    (true, Some(_)) => {
-                        tracing::trace!(%client_id, "existing session was dropped");
-                        None
-                    }
-                    (true, None) => {
-                        tracing::trace!(%client_id, "starting clean session");
-                        None
-                    }
+                let takeover_data = SessionTakeover {
+                    client_id,
+                    assigned: assigned_client_id.is_some(),
+                    client_index,
+                    clean_session,
+                    response_tx,
                 };
 
-                if let Some(replaced_connection) = self.clients.by_index[client_index]
+                let Some(replaced_connection) = self.clients.by_index[client_index]
                     .connection_id
                     .replace(connection_id)
-                {
-                    // TODO: close replaced connection and wait for session to be released [TG-440]
-                    // Doing this also involves sending a will if applicable.
-                    tracing::warn!(%client_id, "leaking replaced connection for client ID");
-                    self.connections.remove(replaced_connection);
-                }
+                else {
+                    // no active connection to replace, so just take over the session.
+                    self.handle_session_takeover(takeover_data);
+                    return;
+                };
 
-                // The client might have disconnected, closing the channel.
-                if let Err(response) = response_tx.send(ConnectionAcceptedResponse {
-                    assigned_client_id,
-                    client_index,
-                    session,
-                }) {
-                    if let Some(store) = response.session {
-                        self.inactive_sessions.insert(client_id, store);
-                    } else {
-                        // Note: a malicious client could theoretically force the version for a slot
-                        // to wrap around by connecting and disconnecting a bunch of times.
-                        //
-                        // While `slotmap` handles this just fine, it could cause us
-                        // to leak information about another client that ended up in the same slot
-                        // if the version happens to wrap around to one referenced by an old key
-                        // somewhere.
-                        //
-                        // This is unlikely to be feasibly exploitable, however, as long as we
-                        // are sure to keep other maps using the same key in-sync. We can also
-                        // make this more difficult to manipulate by throttling connection attempts.
-                        self.clients.remove(client_index);
-                    }
-                }
+                tracing::trace!(%client_id, "beginning session replacement for client ID");
+
+                // cancel the old connection.
+                // todo: we should convince the old connection to send the appropriate Disconnect packet.
+                self.connections[replaced_connection].cancel();
+
+                self.deferred_session_takeovers
+                    .insert(replaced_connection, takeover_data);
             }
         }
     }
@@ -464,7 +517,22 @@ impl MqttBroker {
         self.tasks.len()
     }
 
-    pub async fn shutdown(mut self) -> crate::Result<()> {
+    pub async fn shutdown(self) -> crate::Result<()> {
+        // drop all the parts we don't care about to avoid deadlocks.
+        // Notably:
+        // 1. `self.listener`.
+        //    Close pending connections and stop listening for new ones.
+        // 2. `self.broker_rx`
+        //    Ignore messages from Connections to avoid deadlocks (IE, "replace sessions with this client ID, please").
+        // 3. `self.deferred_session_takeovers`
+        //    drop any outstating connection takeovers as we will not be completing them.
+        let Self {
+            mut tasks,
+            mut inactive_sessions,
+            mut router,
+            shared,
+            ..
+        } = self;
         // Closes any pending connections and stops listening for new ones.
         drop(self.listener);
 
@@ -472,14 +540,14 @@ impl MqttBroker {
 
         self.token.cancel();
 
-        while let Some(Ok(data)) = self.tasks.join_next().await {
+        while let Some(Ok(data)) = tasks.join_next().await {
             handle_connection_lost(
-                &mut self.inactive_sessions,
-                &mut self.router,
-                &self.shared.tce_platform,
+                &mut inactive_sessions,
+                &mut router,
+                &shared.tce_platform,
                 data,
             );
-            tracing::info!("{} connections remaining", self.tasks.len());
+            tracing::info!("{} connections remaining", tasks.len());
         }
 
         Ok(())
