@@ -1,3 +1,4 @@
+use crate::mqtt::trie::Filter;
 use crate::tce_message::PublishTrasaction;
 use bytes::{Buf, BufMut, BytesMut};
 use color_eyre::eyre;
@@ -6,6 +7,7 @@ use der::{Decode, Reader};
 use slotmap::SlotMap;
 use std::collections::{btree_map, BTreeMap};
 use std::mem;
+use std::ops::Bound;
 use std::sync::Arc;
 use tashi_consensus_engine::Timestamp;
 
@@ -79,9 +81,49 @@ impl RetainedMessages {
 
     pub fn visit_matches(
         &self,
-        topic_filter: &str,
-        visit: impl FnMut(Timestamp, TransactionIndex, Arc<PublishTrasaction>),
+        topic_filter: &Filter,
+        mut visit: impl FnMut(Timestamp, TransactionIndex, &Arc<PublishTrasaction>),
     ) {
+        let mut visit_message = |message_id: MessageIndex| {
+            let message = &self.messages[message_id];
+            visit(message.timestamp, message.transaction, &message.publish);
+        };
+
+        let filter_prefix = match topic_filter.exact_or_prefix() {
+            Ok(exact) => {
+                if let Some(&message_id) = self.by_topic.get(exact) {
+                    visit_message(message_id);
+                }
+
+                // An exact filter will only ever match one topic.
+                // Regardless of whether we got a hit, there's no point in searching further.
+                return;
+            }
+            // The topic filter contains at least one wildcard, so we need to search.
+            //
+            // First, find the right place to start in the BTreeMap.
+            // This will be the wildcard-free prefix of the filter.
+            Err(prefix) => prefix,
+        };
+
+        // A BTreeMap sorted by topics may return messages in different orders than they were sent;
+        // this doesn't matter for Retain handling, however, as MQTT only guarantees ordering
+        // for QoS 1 and 2 messages sent by the same client on the same topic.
+        // There is only ever at most one retained message per topic.
+        for (topic, &message_id) in self
+            .by_topic
+            // This is the shenanigans required to get a `.range()` call to compile
+            // on a `BTreeMap<String, _>`.
+            .range::<str, _>((Bound::Included(filter_prefix), Bound::Unbounded))
+        {
+            if topic_filter.matches_topic(topic) {
+                visit_message(message_id);
+            } else if !topic.starts_with(filter_prefix) {
+                // Since `BTreeMap` will sort all topics with the same prefix together,
+                // we can stop iterating once we don't have a common prefix anymore.
+                break;
+            }
+        }
     }
 
     /// Serialization Format:

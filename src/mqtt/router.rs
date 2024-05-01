@@ -1,3 +1,5 @@
+use std::cmp;
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::{Index, IndexMut};
 use std::sync::{Arc, OnceLock};
@@ -587,49 +589,7 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
             packet_id,
             sub_id,
             filters,
-        } => {
-            if !state.clients.contains_key(client_idx) {
-                return;
-            }
-
-            // if state.connections[conn_id].message_tx.is_closed() {
-            //     return;
-            // }
-
-            let reasons: Vec<_> = filters
-                .into_iter()
-                .map(|maybe_filter| {
-                    maybe_filter
-                        // Codes for `None` filters should be overwritten by the connection
-                        // as they would have failed validation on the frontend.
-                        .ok_or(SubscribeReasonCode::Unspecified)
-                        .and_then(|(filter, props)| {
-                            let sub_kind = SubscriptionKind::from_filter(&filter)
-                                .map_err(|_| SubscribeReasonCode::NotAuthorized)?;
-
-                            let qos = props.qos;
-
-                            let (map, place_id) =
-                                state.subscriptions[sub_kind].entry(filter).or_default();
-
-                            map.insert(client_idx, Subscription { id: sub_id, props });
-
-                            state.clients[client_idx].subscriptions[sub_kind].insert(place_id);
-
-                            Ok(SubscribeReasonCode::Success(qos))
-                        })
-                        // Surprisingly there's no easy way to flatten a `Result<T, T>` to `T`
-                        .unwrap_or_else(|code| code)
-                })
-                .collect();
-
-            state.clients[client_idx]
-                .try_send(RouterMessage::SubAck {
-                    packet_id,
-                    return_codes: reasons,
-                })
-                .ok();
-        }
+        } => handle_subscribe(state, client_idx, packet_id, sub_id, filters),
         RouterCommand::Unsubscribe { packet_id, filters } => {
             if !state.clients.contains_key(client_idx) {
                 return;
@@ -670,6 +630,116 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
                     return_codes: reasons,
                 })
                 .ok();
+        }
+    }
+}
+
+fn handle_subscribe(
+    state: &mut RouterState,
+    client_idx: ClientIndex,
+    packet_id: PacketId,
+    sub_id: Option<SubscriptionId>,
+    filters: Vec<Option<(Filter, FilterProperties)>>,
+) {
+    struct RetainedMessage {
+        filter_qos: QoS,
+        publish: Arc<PublishTrasaction>,
+    }
+
+    if !state.clients.contains_key(client_idx) {
+        return;
+    }
+
+    // if state.connections[conn_id].message_tx.is_closed() {
+    //     return;
+    // }
+
+    // Accumulate the retained messages that need to be sent out.
+    let mut retained_messages = BTreeMap::new();
+
+    let reasons: Vec<_> = filters
+        .into_iter()
+        .map(|maybe_filter| {
+            maybe_filter
+                // Codes for `None` filters should be overwritten by the connection
+                // as they would have failed validation on the frontend.
+                .ok_or(SubscribeReasonCode::Unspecified)
+                .and_then(|(filter, props)| {
+                    let sub_kind = SubscriptionKind::from_filter(&filter)
+                        .map_err(|_| SubscribeReasonCode::NotAuthorized)?;
+
+                    let filter_qos = props.qos;
+
+                    let sub_entry = state.subscriptions[sub_kind].entry(filter);
+
+                    // Whether we collect retained messages for this filter depends
+                    // on if the client requested it (Retain Handling).
+                    let collect_retained_messages = matches!(
+                        (props.retain_forward_rule, &sub_entry),
+                        // Retain Handling = 0: Always
+                        (RetainForwardRule::OnEverySubscribe, _)
+                            // Retain Handling = 1: Only if the subscription did *not* exist.
+                            | (RetainForwardRule::OnNewSubscribe, trie::Entry::Vacant(_))
+                    );
+
+                    if collect_retained_messages {
+                        // This is the best place to check if any of our retained messages
+                        // match the new filter, but we need to defer delivery
+                        // until we've sent the `SUBACK`.
+                        state.retained_messages.visit_matches(
+                            sub_entry.filter(),
+                            |timestamp, index, publish| {
+                                let entry = retained_messages
+                                    .entry((timestamp, index))
+                                    .or_insert_with(|| RetainedMessage {
+                                        filter_qos,
+                                        publish: publish.clone(),
+                                    });
+
+                                // If multiple filters match the same message,
+                                // we can implicitly coalesce but we have to respect the maximum
+                                // QoS of all of them.
+                                //
+                                // This technically applies to non-retained messages too.
+                                entry.filter_qos = cmp::max(entry.filter_qos, filter_qos);
+                            },
+                        );
+                    }
+
+                    let (map, place_id) = sub_entry.or_default();
+
+                    map.insert(client_idx, Subscription { id: sub_id, props });
+
+                    state.clients[client_idx].subscriptions[sub_kind].insert(place_id);
+
+                    Ok(SubscribeReasonCode::Success(filter_qos))
+                })
+                // Surprisingly there's no easy way to flatten a `Result<T, T>` to `T`
+                .unwrap_or_else(|code| code)
+        })
+        .collect();
+
+    state.clients[client_idx]
+        .try_send(RouterMessage::SubAck {
+            packet_id,
+            return_codes: reasons,
+        })
+        .ok();
+
+    // Deliver any retained messages.
+    for ((_, _), message) in retained_messages {
+        let delivered = state.clients[client_idx].mail_tx.deliver(
+            message.filter_qos,
+            // Note: for retained messages delivered when the subscription is established,
+            // the Retain flag is always set regardless of the Retain as Published flag
+            // on the subscription.
+            true,
+            sub_id,
+            message.publish,
+        );
+
+        if !delivered {
+            break;
         }
     }
 }
@@ -864,10 +934,13 @@ fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: Pu
 
             tracing::trace!("dispatching PUBLISH to client");
 
-            let delivered =
-                state.clients[client_idx]
-                    .mail_tx
-                    .deliver(sub.props.qos, sub.id, publish.clone());
+            let delivered = state.clients[client_idx].mail_tx.deliver(
+                sub.props.qos,
+                // Retain as Published flag handling
+                sub.props.preserve_retain && publish.meta.retain(),
+                sub.id,
+                publish.clone(),
+            );
 
             if !delivered {
                 tracing::trace!("client channel closed; marking as dead");

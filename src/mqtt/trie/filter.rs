@@ -7,12 +7,26 @@ use arbitrary::Arbitrary;
 
 #[derive(Clone, Debug)]
 pub struct Filter {
-    /// The unadulterated filter string.
-    pub(super) string: Box<str>,
-    /// The indices of level separators in the string.
+    // TODO: `TopicName` could use the same structure
+    /// The unadulterated filter string. Must not be empty.
+    string: Box<str>,
+    /// The byte indices (indexes) of level separators (`/`) in the string.
     ///
-    /// The filter tokens lie between these indices.
-    pub(super) separator_indices: Box<[usize]>,
+    /// The filter tokens fall between these indices, with their lengths being the difference
+    /// between sequential indices. The start of the first token and the end of the last token
+    /// are implied by the bounds of the string itself.
+    ///
+    /// An empty array indicates that `string` represents just a single token.
+    ///
+    /// For example, an array length of 3 indicates the presence of 4 tokens:
+    /// ```ignore
+    /// string[..indices[0]]
+    /// string[indices[0] + 1 .. indices[1]]
+    /// string[indices[1] + 1 .. indices[2]]
+    /// string[indices[2] + 1 ..]
+    /// ```
+    // This could even be a bitvector if we wanted.
+    separator_indices: Box<[usize]>,
     // We don't need to store the `leaf_kind` because we can just look at the end of the string.
 }
 
@@ -47,59 +61,75 @@ impl<'a> Arbitrary<'a> for Filter {
 impl FromStr for Filter {
     type Err = FilterParseError;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.is_empty() {
+    fn from_str(string: &str) -> Result<Self, Self::Err> {
+        if string.is_empty() {
             return Err(FilterParseError::EmptyFilter);
         }
-
-        if s == "#" {
-            return Ok(Filter {
-                string: s.into(),
-                separator_indices: [].into(),
-            });
-        }
-
-        // Strip a trailing any-wildcard as it's not included in `tokens`.
-        let trimmed = s.strip_suffix("/#").unwrap_or(s);
 
         // Count the number of levels first so we can pre-allocate `tokens`.
         //
         // The hope is that this pays off with less traffic to the allocator.
-        let token_count = trimmed.split('/').count();
+        let token_count = string.split('/').count();
+
+        if token_count == 0 {
+            return Ok(Filter {
+                string: string.into(),
+                separator_indices: [].into(),
+            });
+        }
 
         let mut separator_indices = Vec::with_capacity(token_count);
 
         let mut token_start = 0;
 
-        for token in trimmed.split('/') {
-            // We already stripped `/#` so if we see `#` it's an error.
+        let mut tokens = string.split('/');
+
+        while let Some(token) = tokens.next() {
+            // `#` is not a valid `FilterToken`, it's counted in `LeafKind` instead.
             if token == "#" {
-                return Err(FilterParseError::InvalidWildcard);
+                // `#` cannot appear in the middle of a filter.
+                if tokens.next().is_some() {
+                    return Err(FilterParseError::InvalidWildcard);
+                }
+            } else {
+                // Validate the token
+                FilterToken::try_from(token)?;
             }
 
-            // Validate the token
-            FilterToken::try_from(token)?;
-
-            // This will be the index of the `/`, if there is one.
+            // This will be the index of the `/`.
             let separator_index = token_start + token.len();
 
             separator_indices.push(separator_index);
 
-            // Put the next `token_start` after the slash.
+            // Put the next `token_start` after the `/`.
             token_start = separator_index + 1;
         }
 
         Ok(Filter {
-            // Note: *not* the trimmed string
-            string: s.into(),
+            string: string.into(),
             separator_indices: separator_indices.into(),
         })
     }
 }
 
 impl Filter {
-    fn from_tokens(tokens_in: &[impl Borrow<str>], leaf_kind: LeafKind) -> Self {
-        if tokens_in.is_empty() {
+    // Takes `impl Borrow<str>` so we can pass `NameToken` or `FilterToken`.
+    // Takes a slice to optimally pre-allocate our capacity (important for fuzzing).
+    /// Construct a `Filter` from a list of tokens and a `LeafKind`.
+    ///
+    /// ### Note
+    /// This method assumes every token in `tokens` is valid according to `FilterToken::try_from()`.
+    /// The behavior of `Filter` and the rest of the `trie` module is unspecified otherwise,
+    /// i.e. may panic or do weird things, but not trigger UB.
+    // Since this method is private, we can place the burden on the code calling this method
+    // to ensure the tokens are valid.
+    //
+    // This avoids redundant validation, which would slow things down.
+    //
+    // We _could_ validate in `if cfg!(debug_assertions) { ... }`,
+    // but one concern is the performance of fuzzing where that flag is enabled for good reasons.
+    fn from_tokens(tokens: &[impl Borrow<str>], leaf_kind: LeafKind) -> Self {
+        if tokens.is_empty() {
             assert_eq!(leaf_kind, LeafKind::Exact, "filter cannot be empty");
 
             return Self {
@@ -112,9 +142,9 @@ impl Filter {
         // converting to `Box<str>` should be a no-op.
         let mut string = String::with_capacity(
             // Count the number of separators (`/`)
-            tokens_in.len().saturating_sub(1) +
+            tokens.len().saturating_sub(1) +
                     // Sum the lengths of the tokens.
-                    tokens_in.iter().map(|t| t.borrow().len()).sum::<usize>() +
+                    tokens.iter().map(|t| t.borrow().len()).sum::<usize>() +
                     // Count the characters in the leaf
                     match leaf_kind {
                         // Filter ends with a literal or + which was already counted.
@@ -125,22 +155,32 @@ impl Filter {
         );
 
         // Same here.
-        let mut separator_indices = Vec::with_capacity(tokens_in.len().saturating_sub(1));
+        let mut separator_indices = Vec::with_capacity(
+            tokens.len().saturating_sub(1) +
+                // Include the separator for the trailing `/#` since it's not passed in as a token.
+                match leaf_kind {
+                    LeafKind::Exact => 0,
+                    LeafKind::Any => 1,
+                },
+        );
 
-        for tokens in tokens_in.windows(2) {
-            match tokens {
-                [token, _token2] => {
-                    string.push_str(token.borrow());
+        for tokens in tokens.windows(2) {
+            // `.windows()` will always yield non-empty slices.
+            string.push_str(tokens[0].borrow());
 
-                    separator_indices.push(string.len());
-
-                    string.push('/');
-                }
-                [token] => {
-                    string.push_str(token.borrow());
-                }
-                _ => unreachable!(),
+            // If another token follows this one, we know to push a separator.
+            //
+            // We can't use `string.is_empty()` for this
+            // because we could have an empty string as our first token.
+            if tokens.len() > 1 {
+                separator_indices.push(string.len());
+                string.push('/');
             }
+        }
+
+        if leaf_kind == LeafKind::Any {
+            separator_indices.push(string.len());
+            string.push_str("/#");
         }
 
         Self {
@@ -158,9 +198,11 @@ impl Filter {
 
         self.separator_indices
             .iter()
-            .map(move |&token_end| {
-                // Bypass `TryFrom` validation.
+            .filter_map(move |&token_end| {
+                // Bypass `TryFrom` validation for `FilterToken`.
                 let token = match &self.string[token_start..token_end] {
+                    // `#` doesn't count as a token in our scheme.
+                    "#" => return None,
                     "+" => FilterToken::WildPlus,
                     lit => FilterToken::Literal(lit),
                 };
@@ -169,14 +211,14 @@ impl Filter {
 
                 token_start = token_end + 1;
 
-                ret
+                Some(ret)
             })
             .chain(
                 // Append our last token if it's not `#`
                 self.separator_indices.last().and_then(|last_index| {
                     let last_token_start = last_index + 1;
 
-                    match &self.string[last_token_start..] {
+                    match self.string.get(last_token_start..)? {
                         "#" => None,
                         "+" => Some((last_token_start, FilterToken::WildPlus)),
                         lit => Some((last_token_start, FilterToken::Literal(lit))),
@@ -201,7 +243,7 @@ impl Filter {
 
     /// If this is filter is exact (contains no wildcards), return `Ok(self.as_str())`.
     ///
-    /// Otherwise, return the prefix of the filter that contains no wildcards.
+    /// Otherwise, return the literal (wildcard-free) prefix of the filter.
     pub fn exact_or_prefix(&self) -> Result<&str, &str> {
         for (index, token) in self.token_indices() {
             if token.is_wildcard() {
@@ -292,6 +334,11 @@ impl<'a> From<InvalidTokenError<'a>> for FilterParseError {
 #[derive(Clone, Debug)]
 // Defaulted type param so the `trie` module can continue using it like normal.
 pub(super) enum FilterToken<Lit = Box<str>> {
+    // Note: `#` doesn't count as a token in our scheme since it only appears at the end of a filter,
+    // so it's covered by `LeafKind` instead.
+    //
+    // This way, the rest of the `trie` module doesn't have to have code to handle the possibility
+    // of an invalid filter having `#` somewhere in the middle.
     /// A `+` (any on this level) wildcard.
     WildPlus,
     /// `text`
@@ -443,7 +490,7 @@ impl<'a> arbitrary::Arbitrary<'a> for LeafKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{Filter, FilterParseError};
+    use super::{Filter, FilterParseError, LeafKind};
 
     use std::str::FromStr;
 
@@ -572,12 +619,30 @@ mod tests {
     }
 
     #[test]
-    fn literal_prefix() {
+    fn getters() {
         // All literal-only filters should have themselves as prefixes.
         for filter in TEST_TOPICS {
             let parsed: Filter = filter
                 .parse()
                 .unwrap_or_else(|e| panic!("filter {filter:?} failed to parse: {e:?}"));
+
+            assert_eq!(
+                parsed.root_literal(),
+                // All `TEST_TOPICS` start with either `/` or `foo`
+                Some(if parsed.as_str().starts_with('/') {
+                    ""
+                } else {
+                    "foo"
+                }),
+                "incorrect root literal for filter {filter:?}"
+            );
+
+            // Literal filters are always `LeafKind::Exact`
+            assert_eq!(
+                parsed.leaf_kind(),
+                LeafKind::Exact,
+                "incorrect leaf kind for filter {filter:?}"
+            );
 
             assert_eq!(
                 parsed.exact_or_prefix(),
@@ -586,35 +651,52 @@ mod tests {
             );
         }
 
-        let filters_and_prefixes = [
-            ["+", ""],
-            ["#", ""],
-            ["+/+", ""],
-            ["+/#", ""],
-            ["foo/#", "foo/"],
-            ["foo/+", "foo/"],
-            ["foo/+/baz", "foo/"],
-            ["foo/bar/+", "foo/bar/"],
-            ["foo/bar/#", "foo/bar/"],
-            ["/", "/"],
-            ["/+", "/"],
-            ["/#", "/"],
-            ["/foo", "/foo"],
-            ["/foo/#", "/foo/"],
-            ["/foo/+", "/foo/"],
-            ["/foo/+/baz", "/foo/"],
-            ["/foo/bar/#", "/foo/bar/"],
-            ["/foo/bar/+", "/foo/bar/"],
+        let test_filters = [
+            // (filter, prefix, root_literal, leaf_kind)
+            ("+", "", None, LeafKind::Exact),
+            ("#", "", None, LeafKind::Any),
+            ("+/+", "", None, LeafKind::Exact),
+            ("+/#", "", None, LeafKind::Any),
+            ("foo/#", "foo/", Some("foo"), LeafKind::Any),
+            ("foo/+", "foo/", Some("foo"), LeafKind::Exact),
+            ("foo/+/baz", "foo/", Some("foo"), LeafKind::Exact),
+            ("foo/bar/+", "foo/bar/", Some("foo"), LeafKind::Exact),
+            ("foo/bar/#", "foo/bar/", Some("foo"), LeafKind::Any),
+            ("/", "/", Some(""), LeafKind::Exact),
+            ("/+", "/", Some(""), LeafKind::Exact),
+            ("/#", "/", Some(""), LeafKind::Any),
+            ("/foo", "/foo", Some(""), LeafKind::Exact),
+            ("/foo/#", "/foo/", Some(""), LeafKind::Any),
+            ("/foo/+", "/foo/", Some(""), LeafKind::Exact),
+            ("/foo/+/baz", "/foo/", Some(""), LeafKind::Exact),
+            ("/foo/bar/#", "/foo/bar/", Some(""), LeafKind::Any),
+            ("/foo/bar/+", "/foo/bar/", Some(""), LeafKind::Exact),
         ];
 
-        for [filter, prefix] in filters_and_prefixes {
+        for (filter, prefix, root_literal, leaf_kind) in test_filters {
             let parsed: Filter = filter
                 .parse()
                 .unwrap_or_else(|e| panic!("filter {filter:?} failed to parse: {e:?}"));
 
             assert_eq!(
+                parsed.root_literal(),
+                root_literal,
+                "incorrect root literal for filter {filter:?}"
+            );
+
+            assert_eq!(
+                parsed.leaf_kind(),
+                leaf_kind,
+                "incorrect leaf kind for filter {filter:?}"
+            );
+
+            assert_eq!(
                 parsed.exact_or_prefix(),
-                Err(prefix),
+                if filter == prefix {
+                    Ok(prefix)
+                } else {
+                    Err(prefix)
+                },
                 "incorrect prefix for filter {filter:?}"
             );
         }
@@ -652,5 +734,6 @@ mod tests {
             },
             token == "\0"
         );
+        assert_err!("#/bar", FilterParseError::InvalidWildcard);
     }
 }

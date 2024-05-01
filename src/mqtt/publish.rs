@@ -7,7 +7,7 @@ use tashi_collections::FnvHashMap;
 use protocol::{
     ConnectReturnCode, DisconnectReasonCode, LastWill, LastWillProperties, Packet, PubAck,
     PubAckProperties, PubAckReason, PubRec, PubRecProperties, PubRecReason, Publish,
-    PublishProperties, QoS,
+    PublishProperties,
 };
 use rumqttd_protocol as protocol;
 use tce_message::PublishTrasaction;
@@ -341,17 +341,16 @@ pub fn validate_and_convert(
 
 pub fn txn_to_packet(
     txn: &PublishTrasaction,
-    duplicated: bool,
-    qos: QoS,
+    delivery_meta: PublishMeta,
     packet_id: Option<PacketId>,
     sub_ids: &[SubscriptionId],
 ) -> Packet {
     Packet::Publish(
         Publish::with_all(
-            duplicated,
-            qos,
+            delivery_meta.dup(),
+            delivery_meta.qos(),
             PacketId::opt_to_raw(packet_id),
-            false,
+            delivery_meta.retain(),
             Bytes::copy_from_slice(txn.topic.as_bytes()),
             txn.payload.0.clone(),
         ),

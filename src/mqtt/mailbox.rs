@@ -11,7 +11,7 @@ use rumqttd_protocol::QoS;
 
 use crate::mqtt::packets::PacketId;
 use crate::mqtt::router::SubscriptionId;
-use crate::tce_message::PublishTrasaction;
+use crate::tce_message::{PublishMeta, PublishTrasaction};
 
 pub struct MailSender {
     shared: Arc<MailboxShared>,
@@ -46,13 +46,16 @@ pub struct OpenMailbox<'a> {
 ///
 /// QoS 1 and 2 PUBLISHes are required to be delivered in a strict ordering.
 pub struct OrderedMail {
-    /// The QoS the broker is meant to deliver PUBLISHes at.
-    ///
-    /// This is the minimmum of the QoS declared on the PUBLISH,
-    /// and the QoS associated with the Subscription.
-    pub effective_qos: QoS,
     pub packet_id: PacketId,
-    pub duplicated: bool,
+    /// The flags for delivery of the message.
+    ///
+    /// Includes:
+    /// * The DUP flag for the message, set for all opened mail on reconnect.
+    /// * The RETAIN flag for the message, masked with the Retain as Published flag on the sub.
+    /// * The QoS the broker is meant to deliver PUBLISHes at.
+    ///    * This is the minimum of the QoS declared on the PUBLISH,
+    ///      and the QoS associated with the Subscription.
+    pub delivery_meta: PublishMeta,
     pub subscription_ids: Vec<SubscriptionId>,
     pub publish: Arc<PublishTrasaction>,
 }
@@ -61,8 +64,31 @@ pub struct OrderedMail {
 ///
 /// These are not required to be delivered in-order with QoS 1 and 2 PUBLISHes.
 pub struct UnorderedMail {
-    pub subscription_ids: Vec<SubscriptionId>,
+    pub kind: UnorderedMailKind,
     pub publish: Arc<PublishTrasaction>,
+}
+
+/// A compact way to represent the RETAIN flag for a QoS 0 publish.
+///
+/// To add a `retain: bool` field to `UnorderedMail` would mean wasting
+/// an extra 7 bytes for padding on 64-bit, whereas an enum can use the discriminant niches
+/// provided by `Vec`, making it no larger than the `Vec` itself.
+pub enum UnorderedMailKind {
+    /// The message is not retained.
+    NotRetained {
+        /// The subscription IDs that matched this message.
+        subscription_ids: Vec<SubscriptionId>,
+    },
+    /// The message is flagged as retained.
+    Retained {
+        /// The subscription ID for this PUBLISH.
+        ///
+        /// Retained messages are not coalesced,
+        /// because the Retain as Published flag may be different per filter.
+        // Also, if this was a `Vec` then this enum would be 32 bytes instead of 24,
+        // which defeats the purpose of this enum.
+        subscription_id: Option<SubscriptionId>,
+    },
 }
 
 /// Send a `PUBREL` for the given packet.
@@ -71,7 +97,7 @@ pub struct UnorderedMail {
 pub struct Release(pub PacketId);
 
 struct Delivery {
-    effective_qos: QoS,
+    delivery_meta: PublishMeta,
     sub_id: Option<SubscriptionId>,
     publish: Arc<PublishTrasaction>,
 }
@@ -132,6 +158,7 @@ impl MailSender {
     pub fn deliver(
         &mut self,
         subscription_qos: QoS,
+        retain: bool,
         sub_id: Option<SubscriptionId>,
         publish: Arc<PublishTrasaction>,
     ) -> bool {
@@ -150,7 +177,7 @@ impl MailSender {
         self.shared
             .delivery_tx
             .send(Delivery {
-                effective_qos,
+                delivery_meta: PublishMeta::new(effective_qos, retain, false),
                 sub_id,
                 publish,
             })
@@ -198,22 +225,38 @@ impl OpenMailbox<'_> {
                     }
                 };
 
-                match delivery.effective_qos {
+                match delivery.delivery_meta.qos() {
                     QoS::AtMostOnce => {
                         // If this is a duplicate delivery, coalesce into one PUBLISH for v5 clients.
                         if self.mailbox.coalesce_deliveries {
                             if let (Some(mail), Some(sub_id)) =
                                 (self.unordered_mail.back_mut(), delivery.sub_id)
                             {
-                                if Arc::ptr_eq(&mail.publish, &delivery.publish) {
-                                    mail.subscription_ids.push(sub_id);
-                                    continue;
+                                if let UnorderedMailKind::NotRetained { subscription_ids } =
+                                    &mut mail.kind
+                                {
+                                    // We don't coalesce retained messages here.
+                                    // See doc comment on `UnorderedMailKind` for details.
+                                    if !delivery.delivery_meta.retain()
+                                        && Arc::ptr_eq(&mail.publish, &delivery.publish)
+                                    {
+                                        subscription_ids.push(sub_id);
+                                        continue;
+                                    }
                                 }
                             }
                         }
 
                         self.unordered_mail.push_back(UnorderedMail {
-                            subscription_ids: Vec::from_iter(delivery.sub_id),
+                            kind: if delivery.delivery_meta.retain() {
+                                UnorderedMailKind::Retained {
+                                    subscription_id: delivery.sub_id,
+                                }
+                            } else {
+                                UnorderedMailKind::NotRetained {
+                                    subscription_ids: Vec::from_iter(delivery.sub_id),
+                                }
+                            },
                             publish: delivery.publish,
                         });
                     }
@@ -223,7 +266,10 @@ impl OpenMailbox<'_> {
                             if let (Some(mail), Some(sub_id)) =
                                 (self.mailbox.ordered_mail.back_mut(), delivery.sub_id)
                             {
-                                if Arc::ptr_eq(&mail.publish, &delivery.publish) {
+                                // Only coalesce if the delivery meta (esp. retain) matches
+                                if delivery.delivery_meta == mail.delivery_meta
+                                    && Arc::ptr_eq(&mail.publish, &delivery.publish)
+                                {
                                     mail.subscription_ids.push(sub_id);
                                     continue;
                                 }
@@ -231,11 +277,10 @@ impl OpenMailbox<'_> {
                         }
 
                         self.mailbox.ordered_mail.push_back(OrderedMail {
-                            effective_qos: delivery.effective_qos,
+                            delivery_meta: delivery.delivery_meta,
                             packet_id: self.mailbox.next_packet_id.wrapping_increment(),
                             subscription_ids: Vec::from_iter(delivery.sub_id),
                             publish: delivery.publish,
-                            duplicated: false,
                         });
                     }
                 }
@@ -256,7 +301,7 @@ impl OpenMailbox<'_> {
 
     pub fn mark_ordered_read(&mut self) {
         if let Some(mail) = self.mailbox.ordered_mail.get_mut(self.next_unread) {
-            mail.duplicated = true;
+            mail.delivery_meta.set_dup(true);
         }
 
         self.next_unread = cmp::min(self.next_unread + 1, self.mailbox.ordered_mail.len());
@@ -337,5 +382,18 @@ impl Drop for OpenMailbox<'_> {
             .shared
             .accepting_mail
             .store(false, Ordering::Release);
+    }
+}
+
+impl UnorderedMail {
+    pub fn retain(&self) -> bool {
+        matches!(self.kind, UnorderedMailKind::Retained { .. })
+    }
+
+    pub fn subscription_ids(&self) -> &[SubscriptionId] {
+        match &self.kind {
+            UnorderedMailKind::NotRetained { subscription_ids } => subscription_ids,
+            UnorderedMailKind::Retained { subscription_id } => subscription_id.as_slice(),
+        }
     }
 }

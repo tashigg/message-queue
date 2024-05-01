@@ -183,7 +183,7 @@ impl<T> FilterTrie<T> {
     }
 
     fn lookup(&self, filter: &Filter) -> Option<EntryId> {
-        let node_id = visitor::walk_filter(&filter, &self.nodes, self.root).ok()?;
+        let node_id = visitor::walk_filter(filter, &self.nodes, self.root).ok()?;
 
         Some(EntryId {
             node_id,
@@ -639,7 +639,7 @@ struct NameToken<'a>(&'a str);
 
 impl Borrow<str> for NameToken<'_> {
     fn borrow(&self) -> &str {
-        &self.0
+        self.0
     }
 }
 
