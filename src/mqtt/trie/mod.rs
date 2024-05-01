@@ -1,6 +1,7 @@
 #[cfg(feature = "arbitrary")]
 use arbitrary::Arbitrary;
 use slotmap::SlotMap;
+use std::borrow::Borrow;
 use std::fmt::{self, Debug, Write};
 
 use std::ops::{Index, IndexMut};
@@ -182,11 +183,11 @@ impl<T> FilterTrie<T> {
     }
 
     fn lookup(&self, filter: &Filter) -> Option<EntryId> {
-        let node_id = visitor::walk_filter(&filter.tokens, &self.nodes, self.root).ok()?;
+        let node_id = visitor::walk_filter(&filter, &self.nodes, self.root).ok()?;
 
         Some(EntryId {
             node_id,
-            leaf_kind: filter.leaf_kind,
+            leaf_kind: filter.leaf_kind(),
         })
     }
 
@@ -214,11 +215,11 @@ impl<T> FilterTrie<T> {
     }
 
     pub fn entry(&mut self, filter: Filter) -> Entry<'_, T> {
-        match visitor::walk_filter(&filter.tokens, &self.nodes, self.root) {
+        match visitor::walk_filter(&filter, &self.nodes, self.root) {
             Ok(end) => {
                 let entry_id = EntryId {
                     node_id: end,
-                    leaf_kind: filter.leaf_kind,
+                    leaf_kind: filter.leaf_kind(),
                 };
 
                 match self.contains_entry(entry_id) {
@@ -516,19 +517,21 @@ impl<'a, T> VacantEntry<'a, T> {
     pub fn insert(self, value: T) -> (&'a mut T, EntryId) {
         let node_id = match self.place {
             PlaceOrLeaf::Place(place) => {
-                let mut insertions = self.filter.tokens.into_iter().skip(place.token);
+                let mut insertions = self.filter.tokens().skip(place.token);
 
                 let first = insertions.next().unwrap();
                 let new_id = self.nodes.insert(Node::new(place.parent_id));
                 self.nodes[place.parent_id]
                     .filters
-                    .insert(place.idx, (first, new_id));
+                    .insert(place.idx, (first.boxed(), new_id));
                 let mut current = new_id;
 
                 // since we just made a node we know it's empty and don't have to figure out where to push the new nodes.
                 for insertion in insertions {
                     let new_id = self.nodes.insert(Node::new(current));
-                    self.nodes[current].filters.push((insertion, new_id));
+                    self.nodes[current]
+                        .filters
+                        .push((insertion.boxed(), new_id));
                     current = new_id;
                 }
 
@@ -539,10 +542,10 @@ impl<'a, T> VacantEntry<'a, T> {
 
         let place_id = EntryId {
             node_id,
-            leaf_kind: self.filter.leaf_kind,
+            leaf_kind: self.filter.leaf_kind(),
         };
 
-        let value = self.nodes[node_id][self.filter.leaf_kind].insert(value);
+        let value = self.nodes[node_id][self.filter.leaf_kind()].insert(value);
 
         (value, place_id)
     }
@@ -633,6 +636,12 @@ impl<'a> TopicName<'a> {
 /// A UTF-8 string containing no `\0` characters nor any operators.
 #[derive(Copy, Clone, Debug)]
 struct NameToken<'a>(&'a str);
+
+impl Borrow<str> for NameToken<'_> {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(thiserror::Error, Debug)]
 pub enum ParseError {
