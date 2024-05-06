@@ -190,19 +190,34 @@ describe("publish to node 1, receive from node2", () => {
         }
 
         {
-            // This is a wildcard filter but should only match the one topic.
+            // Multi-level wildcards match their parent and any children.
             await client2.subscribeAsync("tickers/btc/#");
 
-            const [topic, message] = await events.once(client2, 'message');
+            const received_msgs = [];
 
-            expect({topic, message: message.toString()}).toEqual(
+            for await (const [topic, message] of events.on(client2, 'message')) {
+                received_msgs.push({
+                    topic,
+                    message: message.toString()
+                });
+
+                if (received_msgs.length === 2) {
+                    break;
+                }
+            }
+
+            expect(received_msgs).toEqual([
                 {
                     topic: "tickers/btc/usd",
                     message: "62838.80"
                 },
-            );
+                {
+                    topic: "tickers/btc",
+                    message: '{ "usd": "62838.80" }'
+                },
+            ]);
 
-            // Ensure only one message is delivered.
+            // Ensure no more messages are delivered.
             const result = await Promise.race([
                 events.once(client2, 'message'),
                 // If the timeout elapses before another message is delivered, this promise will resolve to `[]`.

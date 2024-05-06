@@ -245,19 +245,25 @@ impl Filter {
     ///
     /// Otherwise, return the literal (wildcard-free) prefix of the filter.
     pub fn exact_or_prefix(&self) -> Result<&str, &str> {
+        // `+` should be covered in the `for` loop
+        // (slicing required to satisfy the == operator)
+        if &self.string[..] == "#" {
+            return Err("");
+        }
+
         for (index, token) in self.token_indices() {
             if token.is_wildcard() {
                 return Err(&self.string[..index]);
             }
         }
 
-        // If the string ends in `#` then the literal prefix is just everything before that.
-        if let Some(trimmed) = self.string.strip_suffix('#') {
-            Err(trimmed)
-        } else {
-            // Otherwise, it's a literal string.
-            Ok(&self.string)
+        // If the string ends in `/#` then the literal prefix is just everything before that.
+        if let Some(trimmed) = self.string.strip_suffix("/#") {
+            return Err(trimmed);
         }
+
+        // Otherwise, it's a literal string.
+        Ok(&self.string)
     }
 
     /// Returns `true` if this filter matches the given topic, `false` otherwise.
@@ -286,8 +292,6 @@ impl Filter {
 
         // Require the whole filter to be consumed
         tokens.next().is_none()
-            // `foo/#` must not match `foo`
-            && self.leaf_kind() == LeafKind::Exact
     }
 
     pub(super) fn leaf_kind(&self) -> LeafKind {
@@ -494,9 +498,12 @@ mod tests {
 
     use std::str::FromStr;
 
+    // NOTE: some assertions below assume this list has all topics starting with `/` grouped together.
     const TEST_TOPICS: &[&str] = &[
         "foo",
         "foo/",
+        "foo//",
+        "foo///",
         "foo/bar",
         "foo/bar/",
         "foo/bar/baz",
@@ -508,6 +515,20 @@ mod tests {
         "/foo/bar/",
         "/foo/bar/baz",
         "/foo/bar/baz/",
+        // Topic levels can be empty
+        "//",
+        "/bar/",
+        "//baz",
+        "///",
+        "/bar//",
+        "//baz/",
+        "/foo//",
+        "//bar/",
+        "///baz",
+        "////",
+        "/foo///",
+        "//bar//",
+        "///baz/",
     ];
 
     #[test]
@@ -560,49 +581,99 @@ mod tests {
         test_filter("/foo/bar/+/", &["/foo/bar/baz/"]);
         test_filter("/foo/bar/baz/+", &["/foo/bar/baz/"]);
 
-        // Expect fewer levels (potentially surprising behavior with leading `/`)
         test_filter("+", &["foo"]);
         test_filter("+/", &["/", "foo/"]);
         test_filter("foo/+", &["foo/", "foo/bar"]);
         test_filter("+/+", &["/", "foo/", "/foo", "foo/bar"]);
-        test_filter("+/+/", &["/foo/", "foo/bar/"]);
-        test_filter("foo/+/+", &["foo/bar/", "foo/bar/baz"]);
-        test_filter("+/+/+", &["/foo/", "/foo/bar", "foo/bar/", "foo/bar/baz"]);
-        test_filter("+/+/+/+", &["/foo/bar/", "/foo/bar/baz", "foo/bar/baz/"]);
+        test_filter("+/+/", &["/foo/", "foo/bar/", "//", "foo//", "/bar/"]);
+        test_filter("foo/+/+", &["foo/bar/", "foo/bar/baz", "foo//"]);
+        test_filter(
+            "+/+/+",
+            &[
+                "/foo/",
+                "/foo/bar",
+                "foo/bar/",
+                "foo/bar/baz",
+                "//",
+                "foo//",
+                "/bar/",
+                "//baz",
+            ],
+        );
+        test_filter(
+            "+/+/+/+",
+            &[
+                "/foo/bar/",
+                "/foo/bar/baz",
+                "foo/bar/baz/",
+                "///",
+                "foo///",
+                "/bar//",
+                "//baz/",
+                "/foo//",
+                "//bar/",
+                "///baz",
+            ],
+        );
 
         test_filter("/+", &["/", "/foo"]);
         test_filter("/foo/+", &["/foo/", "/foo/bar"]);
-        test_filter("/+/+", &["/foo/", "/foo/bar"]);
-        test_filter("/foo/+/+", &["/foo/bar/", "/foo/bar/baz"]);
-        test_filter("/+/+/+", &["/foo/bar/", "/foo/bar/baz"]);
-        test_filter("/+/+/+/+", &["/foo/bar/baz/"]);
+        test_filter("/+/+", &["/foo/", "/foo/bar", "//", "/bar/", "//baz"]);
+        test_filter("/foo/+/+", &["/foo/bar/", "/foo/bar/baz", "/foo//"]);
+        test_filter(
+            "/+/+/+",
+            &[
+                "/foo/bar/",
+                "/foo/bar/baz",
+                "///",
+                "/foo//",
+                "/bar//",
+                "//bar/",
+                "//baz/",
+                "///baz",
+            ],
+        );
+        test_filter(
+            "/+/+/+/+",
+            &["/foo/bar/baz/", "////", "/foo///", "//bar//", "///baz/"],
+        );
 
         // Multi-level wildcard
         test_filter("#", TEST_TOPICS);
         test_filter(
             "foo/#",
-            &["foo/", "foo/bar", "foo/bar/", "foo/bar/baz", "foo/bar/baz/"],
-        );
-        test_filter("foo/bar/#", &["foo/bar/", "foo/bar/baz", "foo/bar/baz/"]);
-        test_filter("foo/bar/baz/#", &["foo/bar/baz/"]);
-
-        test_filter(
-            "/#",
             &[
-                "/",
-                "/foo",
-                "/foo/",
-                "/foo/bar",
-                "/foo/bar/",
-                "/foo/bar/baz",
-                "/foo/bar/baz/",
+                // The multi-level wildcard represents the parent and any number of child levels.
+                "foo",
+                "foo/",
+                "foo//",
+                "foo/bar",
+                "foo/bar/",
+                "foo///",
+                "foo/bar/baz",
+                "foo/bar/baz/",
             ],
         );
+        test_filter(
+            "foo/bar/#",
+            &["foo/bar", "foo/bar/", "foo/bar/baz", "foo/bar/baz/"],
+        );
+        test_filter("foo/bar/baz/#", &["foo/bar/baz", "foo/bar/baz/"]);
+
+        let slash_topics_start = TEST_TOPICS
+            .iter()
+            .position(|topic| topic.starts_with('/'))
+            .expect("TEST_TOPICS should contain a set of topics prefixed with `/`");
+
+        test_filter("/#", &TEST_TOPICS[slash_topics_start..]);
 
         test_filter(
             "/foo/#",
             &[
+                "/foo",
                 "/foo/",
+                "/foo//",
+                "/foo///",
                 "/foo/bar",
                 "/foo/bar/",
                 "/foo/bar/baz",
@@ -612,10 +683,10 @@ mod tests {
 
         test_filter(
             "/foo/bar/#",
-            &["/foo/bar/", "/foo/bar/baz", "/foo/bar/baz/"],
+            &["/foo/bar", "/foo/bar/", "/foo/bar/baz", "/foo/bar/baz/"],
         );
 
-        test_filter("/foo/bar/baz/#", &["/foo/bar/baz/"]);
+        test_filter("/foo/bar/baz/#", &["/foo/bar/baz", "/foo/bar/baz/"]);
     }
 
     #[test]
@@ -657,19 +728,20 @@ mod tests {
             ("#", "", None, LeafKind::Any),
             ("+/+", "", None, LeafKind::Exact),
             ("+/#", "", None, LeafKind::Any),
-            ("foo/#", "foo/", Some("foo"), LeafKind::Any),
+            // `#` matches the parent level, so our literal prefix shouldn't include the final `/`
+            ("foo/#", "foo", Some("foo"), LeafKind::Any),
             ("foo/+", "foo/", Some("foo"), LeafKind::Exact),
             ("foo/+/baz", "foo/", Some("foo"), LeafKind::Exact),
             ("foo/bar/+", "foo/bar/", Some("foo"), LeafKind::Exact),
-            ("foo/bar/#", "foo/bar/", Some("foo"), LeafKind::Any),
+            ("foo/bar/#", "foo/bar", Some("foo"), LeafKind::Any),
             ("/", "/", Some(""), LeafKind::Exact),
             ("/+", "/", Some(""), LeafKind::Exact),
-            ("/#", "/", Some(""), LeafKind::Any),
+            ("/#", "", Some(""), LeafKind::Any),
             ("/foo", "/foo", Some(""), LeafKind::Exact),
-            ("/foo/#", "/foo/", Some(""), LeafKind::Any),
+            ("/foo/#", "/foo", Some(""), LeafKind::Any),
             ("/foo/+", "/foo/", Some(""), LeafKind::Exact),
             ("/foo/+/baz", "/foo/", Some(""), LeafKind::Exact),
-            ("/foo/bar/#", "/foo/bar/", Some(""), LeafKind::Any),
+            ("/foo/bar/#", "/foo/bar", Some(""), LeafKind::Any),
             ("/foo/bar/+", "/foo/bar/", Some(""), LeafKind::Exact),
         ];
 
