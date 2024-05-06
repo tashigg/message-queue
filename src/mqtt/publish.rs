@@ -305,7 +305,7 @@ pub fn validate_and_convert(
                     invalid_alias!("unknown topic alias: {topic_alias}");
                 };
 
-                topic = resolved_topic.clone();
+                topic.clone_from(resolved_topic);
             } else {
                 topic_aliases.insert(topic_alias, topic.clone());
             }
