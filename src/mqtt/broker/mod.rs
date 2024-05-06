@@ -86,7 +86,7 @@ pub struct MqttBroker {
     ///
     /// When `key` closes out, `value` takes over the session immediately,
     /// if the value is a `clean_session` or the session expires on disconnect, a new session will be created instead.
-    deferred_session_takeovers: HashMap<ConnectionId, SessionTakeover>,
+    pending_session_takeovers: HashMap<ConnectionId, SessionTakeover>,
 
     /// Generator for `ConnectionId`s
     connections: SlotMap<ConnectionId, CancellationToken>,
@@ -216,7 +216,7 @@ impl MqttBroker {
             token,
             clients: Default::default(),
             pending_wills: Default::default(),
-            deferred_session_takeovers: Default::default(),
+            pending_session_takeovers: Default::default(),
             connections: SlotMap::with_capacity_and_key(256),
             tasks: JoinSet::new(),
             shared: Arc::new(Shared {
@@ -261,7 +261,7 @@ impl MqttBroker {
                     self.connections.remove(conn_id);
                     handle_connection_lost(&mut self.inactive_sessions, &mut self.router, &self.shared.tce_platform, data);
 
-                    if let Some(takeover) = self.deferred_session_takeovers.remove(&conn_id) {
+                    if let Some(takeover) = self.pending_session_takeovers.remove(&conn_id) {
                         self.handle_session_takeover(takeover);
                     }
                 }
@@ -508,7 +508,7 @@ impl MqttBroker {
                 // todo: we should convince the old connection to send the appropriate Disconnect packet.
                 self.connections[replaced_connection].cancel();
 
-                self.deferred_session_takeovers
+                self.pending_session_takeovers
                     .insert(replaced_connection, takeover_data);
             }
         }
