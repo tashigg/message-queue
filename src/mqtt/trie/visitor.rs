@@ -1,6 +1,6 @@
-use super::filter::{FilterToken, LeafKind};
+use super::filter::LeafKind;
 use super::node::NodeId;
-use super::NameToken;
+use super::{Filter, NameToken};
 
 /// An identification on where to insert a node if it's missing.
 pub(super) struct NodePlace {
@@ -10,17 +10,17 @@ pub(super) struct NodePlace {
 }
 
 pub(super) fn walk_filter<T>(
-    filter: &[FilterToken],
+    filter: &Filter,
     cx: &super::Nodes<T>,
     root: NodeId,
 ) -> Result<NodeId, NodePlace> {
     let mut node_id = root;
-    for (token_idx, token) in filter.iter().enumerate() {
+    for (token_idx, token) in filter.tokens().enumerate() {
         let node = &cx[node_id];
 
         let idx = node
             .filters
-            .binary_search_by_key(&token, |it| &it.0)
+            .binary_search_by(|(token_, _)| token.cmp_strings(token_))
             .map_err(|idx| NodePlace {
                 parent_id: node_id,
                 token: token_idx,

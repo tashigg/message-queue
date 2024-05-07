@@ -5,7 +5,7 @@ use crate::mqtt::router::{FilterProperties, RouterConnection, RouterMessage, Sub
 use crate::mqtt::session::{Session, SessionStore};
 use crate::mqtt::trie::Filter;
 use crate::mqtt::{client_id, publish, ClientId, ClientIndex, ConnectionId};
-use crate::tce_message::{Transaction, TransactionData};
+use crate::tce_message::{PublishMeta, Transaction, TransactionData};
 use bytes::BytesMut;
 
 use crate::mqtt::mailbox::OpenMailbox;
@@ -203,14 +203,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
         loop {
             tokio::select! {
-                res = self.recv() => {
-                    let Some(packet) = res? else {
-                        tracing::info!("Socket closed; exiting.");
-                        break;
-                    };
-
-                    self.handle_packet(&mut store.session, &mut mailbox, &mut router, packet).await?;
-                },
+                biased;
+                // We always want to check if we have new router messages before
+                // anything else; this way we can be sure we send out `SUBACK` packets
+                // in response to a new subscription before we handle any retained messages
+                // that arrive in our mailbox shortly afterward.
                 maybe_msg = router.next_message() => {
                     let Some(msg) = maybe_msg else {
                         self.disconnect(DisconnectReasonCode::ServerShuttingDown, "broker shutting down").await?;
@@ -220,6 +217,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                     self.handle_message(&mut router, msg).await?;
                 }
                 () = mailbox.process_deliveries() => {}
+                res = self.recv() => {
+                    let Some(packet) = res? else {
+                        tracing::info!("Socket closed; exiting.");
+                        break;
+                    };
+
+                    self.handle_packet(&mut store.session, &mut mailbox, &mut router, packet).await?;
+                },
             }
 
             self.handle_mail(&mut mailbox).await?;
@@ -417,8 +422,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
             self.send(publish::txn_to_packet(
                 &mail.publish,
-                mail.duplicated,
-                mail.effective_qos,
+                mail.delivery_meta,
                 Some(mail.packet_id),
                 &mail.subscription_ids,
             ))
@@ -430,10 +434,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         while let Some(mail) = mailbox.pop_unordered() {
             self.send(publish::txn_to_packet(
                 &mail.publish,
-                false,
-                QoS::AtMostOnce,
+                PublishMeta::new(QoS::AtMostOnce, mail.retain(), false),
                 None,
-                &mail.subscription_ids,
+                mail.subscription_ids(),
             ))
             .await?;
         }

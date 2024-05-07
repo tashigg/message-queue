@@ -16,6 +16,8 @@ mod mailbox;
 
 mod publish;
 
+mod retain;
+
 mod router;
 
 mod keep_alive;

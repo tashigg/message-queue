@@ -302,7 +302,7 @@ pub struct Filter {
     pub retain_forward_rule: RetainForwardRule,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum RetainForwardRule {
     OnEverySubscribe,
     OnNewSubscribe,

@@ -21,7 +21,7 @@ pub enum TransactionData {
 
 // Transcoding to DER was chosen so that we are not baking-in a specific version of the MQTT protocol.
 /// DER mapping of [`rumqttd::protocol::Packet::Publish`].
-#[derive(der::Sequence, Debug)]
+#[derive(der::Sequence, Debug, PartialEq, Eq)]
 pub struct PublishTrasaction {
     pub topic: String,
     pub meta: PublishMeta,
@@ -43,7 +43,7 @@ pub struct PublishTrasaction {
 ///
 /// `topic_alias` and `subscription_identifiers` are omitted as they are only used between
 /// a client and a broker.
-#[derive(der::Sequence, Debug)]
+#[derive(der::Sequence, Debug, PartialEq, Eq)]
 pub struct PublishTransactionProperties {
     // Note: these match the tag bytes used by the MQTT protocol, where possible.
     #[asn1(context_specific = "1", optional = "true")]
@@ -142,12 +142,22 @@ impl<'a> der::DecodeValue<'a> for PublishMeta {
 
 impl PublishMeta {
     const DUP_SHIFT: u8 = 7;
+    const DUP_BIT: u8 = 1 << Self::DUP_SHIFT;
+
     const RETAIN_SHIFT: u8 = 6;
+    const RETAIN_BIT: u8 = 1 << Self::RETAIN_SHIFT;
+
     /// quality of service takes 2 bits, there are two mental models for this shift:
     /// move the leftmost bit from bit 1 to bit 5, shift the rightmost bit to bit 4.
     const QOS_SHIFT: u8 = 5 - 1;
 
-    pub const fn new(qos: QoS, retain: bool, dup: bool) -> Self {
+    pub fn new(qos: QoS, retain: bool, dup: bool) -> Self {
+        debug_assert_ne!(
+            (qos, dup),
+            (QoS::AtMostOnce, true),
+            "`dup` should not be set with QoS 0"
+        );
+
         let dup = (dup as u8) << Self::DUP_SHIFT;
         let retain = (retain as u8) << Self::RETAIN_SHIFT;
 
@@ -165,6 +175,15 @@ impl PublishMeta {
         Self::unpack_retain(self.0)
     }
 
+    #[must_use = "this function has no side-effects"]
+    pub const fn with_retain(self, retain: bool) -> Self {
+        Self(if retain {
+            self.0 | Self::RETAIN_BIT
+        } else {
+            self.0 & !Self::RETAIN_BIT
+        })
+    }
+
     const fn unpack_dup(byte: u8) -> bool {
         (byte >> Self::DUP_SHIFT) & 1 == 1
     }
@@ -172,6 +191,26 @@ impl PublishMeta {
     #[must_use = "this function has no side-effects"]
     pub const fn dup(self) -> bool {
         Self::unpack_dup(self.0)
+    }
+
+    pub fn set_dup(&mut self, dup: bool) {
+        if dup {
+            debug_assert_ne!(
+                self.qos(),
+                QoS::AtMostOnce,
+                "`dup` should not be set with QoS 0"
+            );
+
+            self.0 |= Self::DUP_BIT
+        } else {
+            self.0 &= !Self::DUP_BIT
+        }
+    }
+
+    #[must_use = "this function has no side-effects"]
+    pub fn with_dup(mut self, dup: bool) -> Self {
+        self.set_dup(dup);
+        self
     }
 
     const fn pack_qos(qos: QoS) -> u8 {
@@ -220,7 +259,7 @@ impl Debug for PublishMeta {
 
 // FIXME: remove when `der 0.8.0` is released:
 // https://github.com/RustCrypto/formats/issues/1356#issuecomment-1956225669
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BytesAsOctetString(pub Bytes);
 
 impl der::FixedTag for BytesAsOctetString {
@@ -373,23 +412,58 @@ mod tests {
 
     #[test]
     fn publish_meta() {
+        // QoS 0
         let meta = PublishMeta::new(QoS::AtMostOnce, false, false);
         assert_eq!(meta.0, 0b0000_0000);
         assert_eq!(meta.qos(), QoS::AtMostOnce);
         assert!(!meta.retain());
         assert!(!meta.dup());
 
+        let meta = meta.with_retain(true);
+        assert_eq!(meta.0, 0b0100_0000);
+        assert_eq!(meta.qos(), QoS::AtMostOnce);
+        assert!(meta.retain());
+        assert!(!meta.dup());
+
+        // QoS 0 should never have `dup = true`.
+
+        // QoS 1
         let meta = PublishMeta::new(QoS::AtLeastOnce, true, true);
         assert_eq!(dbg!(meta).0, 0b1110_0000);
         assert_eq!(meta.qos(), QoS::AtLeastOnce);
         assert!(meta.retain());
         assert!(meta.dup());
 
+        let meta = meta.with_retain(false);
+        assert_eq!(dbg!(meta).0, 0b1010_0000);
+        assert_eq!(meta.qos(), QoS::AtLeastOnce);
+        assert!(!meta.retain());
+        assert!(meta.dup());
+
+        let meta = meta.with_dup(false);
+        assert_eq!(dbg!(meta).0, 0b0010_0000);
+        assert_eq!(meta.qos(), QoS::AtLeastOnce);
+        assert!(!meta.retain());
+        assert!(!meta.dup());
+
+        // QoS 2
         let meta = PublishMeta::new(QoS::ExactlyOnce, false, true);
         assert_eq!(meta.0, 0b1011_0000);
         assert_eq!(meta.qos(), QoS::ExactlyOnce);
         assert!(!meta.retain());
         assert!(meta.dup());
+
+        let meta = meta.with_retain(true);
+        assert_eq!(meta.0, 0b1111_0000);
+        assert_eq!(meta.qos(), QoS::ExactlyOnce);
+        assert!(meta.retain());
+        assert!(meta.dup());
+
+        let meta = meta.with_dup(false);
+        assert_eq!(meta.0, 0b0111_0000);
+        assert_eq!(meta.qos(), QoS::ExactlyOnce);
+        assert!(meta.retain());
+        assert!(!meta.dup());
     }
 
     #[test]
