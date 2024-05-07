@@ -115,11 +115,12 @@ describe("publish to node 1, receive from node2", () => {
 
     test("retained messages", async () => {
         // The timeout to wait when we want to make sure no more messages are being sent on a topic.
-        const no_message_timeout = 500;
+        const no_message_timeout = 250;
 
         const client1 = await mqtt.connectAsync("mqtt://localhost:1883", {protocolVersion: 5});
         const client2 = await mqtt.connectAsync("mqtt://localhost:1884", {protocolVersion: 5});
 
+        console.log('sending retained messages');
         await client1.publishAsync("tickers/eth/usd", "3107.60", {qos: 1, retain: true});
         await client1.publishAsync("tickers/eth", '{ "usd": "3107.60" }', {qos: 1, retain: true});
         await client1.publishAsync("tickers/btc/usd", "62838.80", {qos: 1, retain: true});
@@ -128,6 +129,8 @@ describe("publish to node 1, receive from node2", () => {
         const received_msgs = [];
 
         await client2.subscribeAsync("tickers/#");
+
+        console.log('waiting for retained messages');
 
         // Makes sure the retained messages are sent before we test the actual retain handling
         for await (const [topic, message] of events.on(client2, 'message')) {
@@ -166,6 +169,8 @@ describe("publish to node 1, receive from node2", () => {
 
         // Test retained message delivery
         {
+            console.log('test retained messages: exact topic');
+
             await client2.subscribeAsync("tickers/eth");
 
             const [topic, message] = await events.once(client2, 'message');
@@ -190,6 +195,8 @@ describe("publish to node 1, receive from node2", () => {
         }
 
         {
+            console.log('test retained messages: multi-level wildcard');
+
             // Multi-level wildcards match their parent and any children.
             await client2.subscribeAsync("tickers/btc/#");
 
@@ -230,6 +237,8 @@ describe("publish to node 1, receive from node2", () => {
         }
 
         {
+            console.log('test retained messages: single-level wildcard');
+
             // Since this is a single-level wildcard, we should only expect 2 messages.
             await client2.subscribeAsync("tickers/+");
 
