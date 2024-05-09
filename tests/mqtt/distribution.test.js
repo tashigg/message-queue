@@ -9,8 +9,9 @@ describe("publish to node 1, receive from node2", () => {
     // Putting tests in a `describe()` block appears to cause them to execute sequentially.
     // This way we can avoid any unintentional cross-pollination between tests.
     test("synchronously", async () => {
+        // Test v4 (3.1.1) and v5 (5.0) simultaneously
+        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 4 });
         // `protocolVersion` defaults to 4 (v3.1.1) otherwise
-        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
         const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
 
         await client2.subscribeAsync("weather");
@@ -28,7 +29,7 @@ describe("publish to node 1, receive from node2", () => {
     });
 
     test("asynchronously, delivered on reconnect", async () => {
-        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 4 });
         const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
 
         await client2.subscribeAsync("weather/sacramento", { qos: 2 });
@@ -117,7 +118,7 @@ describe("publish to node 1, receive from node2", () => {
         // The timeout to wait when we want to make sure no more messages are being sent on a topic.
         const no_message_timeout = 250;
 
-        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 4 });
         const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
 
         console.log('sending retained messages');

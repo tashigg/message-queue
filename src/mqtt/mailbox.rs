@@ -24,7 +24,6 @@ pub struct Mailbox {
     next_packet_id: PacketId,
     // QoS 2 packet IDs that have had their `PUBREL` sent, but no `PUBCOMP` has been received yet.
     released_ids: HashSet<PacketId>,
-    coalesce_deliveries: bool,
 }
 
 struct MailboxShared {
@@ -94,7 +93,7 @@ pub enum UnorderedMailKind {
 /// Send a `PUBREL` for the given packet.
 #[derive(Debug)]
 #[must_use = "must send `PUBREL` to the client"]
-pub struct Release(pub PacketId);
+pub struct Release(#[allow(dead_code)] pub PacketId);
 
 struct Delivery {
     delivery_meta: PublishMeta,
@@ -103,10 +102,6 @@ struct Delivery {
 }
 
 impl Mailbox {
-    pub fn coalesce_deliveries(&mut self, value: bool) {
-        self.coalesce_deliveries = value;
-    }
-
     pub fn sender(&self) -> MailSender {
         MailSender {
             shared: self.shared.clone(),
@@ -139,7 +134,6 @@ impl Default for Mailbox {
             next_packet_id: PacketId::START,
             released_ids: HashSet::default(),
             ordered_mail: VecDeque::new(),
-            coalesce_deliveries: false,
         }
     }
 }
@@ -226,69 +220,92 @@ impl OpenMailbox<'_> {
                 };
 
                 match delivery.delivery_meta.qos() {
-                    QoS::AtMostOnce => {
-                        // If this is a duplicate delivery, coalesce into one PUBLISH for v5 clients.
-                        if self.mailbox.coalesce_deliveries {
-                            if let (Some(mail), Some(sub_id)) =
-                                (self.unordered_mail.back_mut(), delivery.sub_id)
-                            {
-                                if let UnorderedMailKind::NotRetained { subscription_ids } =
-                                    &mut mail.kind
-                                {
-                                    // We don't coalesce retained messages here.
-                                    // See doc comment on `UnorderedMailKind` for details.
-                                    if !delivery.delivery_meta.retain()
-                                        && Arc::ptr_eq(&mail.publish, &delivery.publish)
-                                    {
-                                        subscription_ids.push(sub_id);
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-
-                        self.unordered_mail.push_back(UnorderedMail {
-                            kind: if delivery.delivery_meta.retain() {
-                                UnorderedMailKind::Retained {
-                                    subscription_id: delivery.sub_id,
-                                }
-                            } else {
-                                UnorderedMailKind::NotRetained {
-                                    subscription_ids: Vec::from_iter(delivery.sub_id),
-                                }
-                            },
-                            publish: delivery.publish,
-                        });
-                    }
-                    QoS::AtLeastOnce | QoS::ExactlyOnce => {
-                        // If this is a duplicate delivery, coalesce into one PUBLISH for v5 clients.
-                        if self.mailbox.coalesce_deliveries {
-                            if let (Some(mail), Some(sub_id)) =
-                                (self.mailbox.ordered_mail.back_mut(), delivery.sub_id)
-                            {
-                                // Only coalesce if the delivery meta (esp. retain) matches
-                                if delivery.delivery_meta == mail.delivery_meta
-                                    && Arc::ptr_eq(&mail.publish, &delivery.publish)
-                                {
-                                    mail.subscription_ids.push(sub_id);
-                                    continue;
-                                }
-                            }
-                        }
-
-                        self.mailbox.ordered_mail.push_back(OrderedMail {
-                            delivery_meta: delivery.delivery_meta,
-                            packet_id: self.mailbox.next_packet_id.wrapping_increment(),
-                            subscription_ids: Vec::from_iter(delivery.sub_id),
-                            publish: delivery.publish,
-                        });
-                    }
+                    QoS::AtMostOnce => self.push_unordered(delivery),
+                    QoS::AtLeastOnce | QoS::ExactlyOnce => self.push_ordered(delivery),
                 }
 
                 received = true;
             }
         })
         .await;
+    }
+
+    fn push_unordered(&mut self, delivery: Delivery) {
+        debug_assert_eq!(delivery.delivery_meta.qos(), QoS::AtMostOnce);
+
+        if let Some(UnorderedMail {
+            // We don't coalesce retained QoS 0 messages.
+            // See doc comment on `UnorderedMailKind` for details.
+            kind: UnorderedMailKind::NotRetained { subscription_ids },
+            publish,
+        }) = self.unordered_mail.back_mut()
+        {
+            // If this is a duplicate delivery, coalesce into one PUBLISH.
+            // This is allowed by both V5 and V4.
+            let do_coalesce =
+                Arc::ptr_eq(publish, &delivery.publish) && !delivery.delivery_meta.retain();
+
+            // Technically, coalescing is allowed to increase the QoS,
+            // but since we store unordered messages in a separate queue it's harder to do that.
+            if do_coalesce {
+                // No-op for V4 clients since they don't have the concept of subscription IDs.
+                subscription_ids.extend(delivery.sub_id);
+                return;
+            }
+        }
+
+        self.unordered_mail.push_back(UnorderedMail {
+            kind: if delivery.delivery_meta.retain() {
+                UnorderedMailKind::Retained {
+                    subscription_id: delivery.sub_id,
+                }
+            } else {
+                UnorderedMailKind::NotRetained {
+                    subscription_ids: Vec::from_iter(delivery.sub_id),
+                }
+            },
+            publish: delivery.publish,
+        });
+    }
+
+    fn push_ordered(&mut self, delivery: Delivery) {
+        debug_assert_ne!(delivery.delivery_meta.qos(), QoS::AtMostOnce);
+
+        if let Some(mail) = self.mailbox.ordered_mail.back_mut() {
+            // If this is a duplicate delivery, coalesce into one PUBLISH.
+            // This is allowed by both V5 and V4.
+            let do_coalesce = Arc::ptr_eq(&mail.publish, &delivery.publish)
+                // Don't coalesce if the Retain flag doesn't match
+                // as different filters may have different Retain as Published flags.
+                && delivery.delivery_meta.retain() == mail.delivery_meta.retain()
+                // Only coalesce if the mail hasn't been read yet.
+                // Otherwise, we need to inform the client that a new sub ID matched.
+                // Hitting this would be a weird edge case most of the time though.
+                && !mail.delivery_meta.dup();
+
+            if do_coalesce {
+                // When Clients make subscriptions with Topic Filters that include
+                // wildcards, it is possible for a Client’s subscriptions to overlap
+                // so that a published message might match multiple filters.
+                //
+                // In this case the Server MUST deliver the message to the Client
+                // respecting the maximum QoS of all the matching subscriptions
+                // [MQTT-3.3.5-1].
+                mail.delivery_meta
+                    .increase_qos_to(delivery.delivery_meta.qos());
+
+                // No-op for V4 clients since they don't have the concept of subscription IDs.
+                mail.subscription_ids.extend(delivery.sub_id);
+                return;
+            }
+        }
+
+        self.mailbox.ordered_mail.push_back(OrderedMail {
+            delivery_meta: delivery.delivery_meta,
+            packet_id: self.mailbox.next_packet_id.wrapping_increment(),
+            subscription_ids: Vec::from_iter(delivery.sub_id),
+            publish: delivery.publish,
+        });
     }
 
     pub fn pop_unordered(&mut self) -> Option<UnorderedMail> {

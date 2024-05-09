@@ -42,7 +42,7 @@ fn reason(code: u8) -> Result<SubscribeReasonCode, Error> {
         0 => SubscribeReasonCode::Success(QoS::AtMostOnce),
         1 => SubscribeReasonCode::Success(QoS::AtLeastOnce),
         2 => SubscribeReasonCode::Success(QoS::ExactlyOnce),
-        128 => SubscribeReasonCode::Failure,
+        0x80 => SubscribeReasonCode::Failure,
         v => return Err(Error::InvalidSubscribeReasonCode(v)),
     };
 
@@ -52,18 +52,7 @@ fn reason(code: u8) -> Result<SubscribeReasonCode, Error> {
 fn code(reason: SubscribeReasonCode) -> u8 {
     match reason {
         SubscribeReasonCode::Success(qos) => qos as u8,
-        SubscribeReasonCode::Failure => 0x80,
-        SubscribeReasonCode::QoS0 => 0,
-        SubscribeReasonCode::QoS1 => 1,
-        SubscribeReasonCode::QoS2 => 2,
-        SubscribeReasonCode::Unspecified => 128,
-        SubscribeReasonCode::ImplementationSpecific => 131,
-        SubscribeReasonCode::NotAuthorized => 135,
-        SubscribeReasonCode::TopicFilterInvalid => 143,
-        SubscribeReasonCode::PkidInUse => 145,
-        SubscribeReasonCode::QuotaExceeded => 151,
-        SubscribeReasonCode::SharedSubscriptionsNotSupported => 158,
-        SubscribeReasonCode::SubscriptionIdNotSupported => 161,
-        SubscribeReasonCode::WildcardSubscriptionsNotSupported => 162,
+        // SUBACK return codes other than 0x00, 0x01, 0x02 and 0x80 are reserved and MUST NOT be used [MQTT-3.9.3-2].
+        _ => 0x80,
     }
 }

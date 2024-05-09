@@ -39,7 +39,7 @@ fn connect_return(num: u8) -> Result<ConnectReturnCode, Error> {
     match num {
         0 => Ok(ConnectReturnCode::Success),
         1 => Ok(ConnectReturnCode::RefusedProtocolVersion),
-        2 => Ok(ConnectReturnCode::BadClientId),
+        2 => Ok(ConnectReturnCode::ClientIdentifierNotValid),
         3 => Ok(ConnectReturnCode::ServiceUnavailable),
         4 => Ok(ConnectReturnCode::BadUserNamePassword),
         5 => Ok(ConnectReturnCode::NotAuthorized),
@@ -50,11 +50,13 @@ fn connect_return(num: u8) -> Result<ConnectReturnCode, Error> {
 fn connect_code(return_code: ConnectReturnCode) -> u8 {
     match return_code {
         ConnectReturnCode::Success => 0,
+        // Unlike other reason codes, MQTT v4 (3.1.1)'s Connect Return Code
+        // does not use >= 0x80 for error return statuses.
         ConnectReturnCode::RefusedProtocolVersion => 1,
-        ConnectReturnCode::BadClientId => 2,
+        ConnectReturnCode::ClientIdentifierNotValid => 2,
         ConnectReturnCode::ServiceUnavailable => 3,
         ConnectReturnCode::BadUserNamePassword => 4,
         ConnectReturnCode::NotAuthorized => 5,
-        _ => unreachable!(),
+        _ => panic!("unsupported CONNACK code: {return_code:?}"),
     }
 }

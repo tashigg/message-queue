@@ -110,7 +110,6 @@ pub struct Login {
 pub enum ConnectReturnCode {
     Success,
     RefusedProtocolVersion,
-    BadClientId,
     ServiceUnavailable,
     UnspecifiedError,
     MalformedPacket,
@@ -336,9 +335,6 @@ impl SubAck {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubscribeReasonCode {
-    QoS0,
-    QoS1,
-    QoS2,
     Success(QoS),
     Failure,
     Unspecified,

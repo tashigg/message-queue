@@ -144,8 +144,8 @@ jobs:
       - name: Smoke test
         # May stall on some checks; keep trucking with the rest of the tests.
         timeout-minutes: 5
-        run: |
-          docker run --net=host hivemq/mqtt-cli test -V5 -a
+        # Run all tests on both versions
+        run: docker run --net=host hivemq/mqtt-cli test -a
 
       # actions/setup-node@v4 doesn't seem to work, I didn't investigate.
       - name: Install Node and NPM

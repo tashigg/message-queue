@@ -4,10 +4,11 @@ use crate::mqtt::publish::ValidateError;
 use crate::mqtt::router::{FilterProperties, RouterConnection, RouterMessage, SubscriptionId};
 use crate::mqtt::session::{Session, SessionStore};
 use crate::mqtt::trie::Filter;
-use crate::mqtt::{client_id, publish, ClientId, ClientIndex, ConnectionId};
+use crate::mqtt::{client_id, connect, publish, ClientId, ClientIndex, ConnectionId, DynProtocol};
 use crate::tce_message::{PublishMeta, Transaction, TransactionData};
 use bytes::BytesMut;
 
+use crate::mqtt::connect::ConnectPacket;
 use crate::mqtt::mailbox::OpenMailbox;
 use crate::mqtt::KeepAlive;
 use der::Encode;
@@ -20,7 +21,7 @@ use protocol::{
 };
 use rumqttd_protocol as protocol;
 use rumqttd_protocol::{PubComp, PubCompReason, PubRel, PubRelReason};
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
@@ -52,7 +53,7 @@ pub struct Connection<S: AsyncRead + AsyncWrite> {
     client_index: Option<ClientIndex>,
     keep_alive: KeepAlive,
 
-    protocol: protocol::v5::V5,
+    protocol: DynProtocol,
     stream: S,
     read_buf: BytesMut,
     write_buf: BytesMut,
@@ -132,7 +133,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             client_id: None,
             client_index: None,
             keep_alive: KeepAlive::default(),
-            protocol: protocol::v5::V5,
+            // This doesn't actually matter until after we read the CONNECT packet.
+            protocol: DynProtocol::V5,
             stream,
             read_buf: BytesMut::with_capacity(8192),
             write_buf: BytesMut::with_capacity(8192),
@@ -177,13 +179,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
     }
 
     async fn run_inner(&mut self, store: &mut SessionStore) -> crate::Result<()> {
-        // TODO: set timeouts on the `TcpStream` so a malicious client cannot hold it open forever
-
-        let Some(packet) = self.recv().await? else {
-            return Ok(());
-        };
-
-        let Some((client_id, router)) = self.handle_connect_packet(store, &packet).await? else {
+        // Read CONNECT packet
+        let Some((client_id, router)) = self.handle_connect(store).await? else {
             tracing::info!("Router channel closed; exiting.");
             return Ok(());
         };
@@ -445,26 +442,30 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
     }
 
     // Handles disconnection internally, so does not return `PacketError`
-    async fn handle_connect_packet(
+    async fn handle_connect(
         &mut self,
         store: &mut SessionStore,
-        packet: &Packet,
     ) -> crate::Result<Option<(ClientId, RouterConnection)>> {
-        let Packet::Connect(connect, connect_properties, last_will, last_will_properties, login) =
-            packet
-        else {
-            self.disconnect_on_connect_error(
-                ConnectReturnCode::ProtocolError,
-                "expected CONNECT packet",
-            )
+        let packet = self
+            .recv_with(|read_buf| connect::read(read_buf, usize::MAX))
             .await?;
 
+        let Some(packet) = packet else {
             return Ok(None);
         };
 
-        tracing::trace!(?packet, "received");
+        let ConnectPacket {
+            protocol,
+            connect,
+            connect_props,
+            last_will,
+            last_will_props,
+            login,
+        } = packet;
 
-        if connect_properties.as_ref().is_some_and(|props| {
+        self.protocol = protocol;
+
+        if connect_props.as_ref().is_some_and(|props| {
             props.authentication_method.is_some() || props.authentication_data.is_some()
         }) {
             self.disconnect_on_connect_error(
@@ -529,7 +530,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         // we have to check the `last_will` for validity (if it even exists).
         store.session.last_will = match last_will
             .as_ref()
-            .map(|it| publish::validate_and_convert_last_will(it, last_will_properties.as_ref()))
+            .map(|it| publish::validate_and_convert_last_will(it, last_will_props.as_ref()))
         {
             Some(Ok(value)) => Some(value),
             None => None,
@@ -579,17 +580,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             false
         };
 
-        if let Some(connection_properties) = connect_properties {
-            store.expiry = connection_properties.session_expiry_interval.into();
+        if let Some(connect_props) = connect_props {
+            store.expiry = connect_props.session_expiry_interval.into();
 
-            if let Some(receive_maximum) = connection_properties.receive_maximum {
+            if let Some(receive_maximum) = connect_props.receive_maximum {
                 self.client_receive_maximum =
                     cmp::min(self.client_receive_maximum, receive_maximum);
             }
         }
-
-        // TODO: don't enable this for v4
-        store.mailbox.coalesce_deliveries(true);
 
         let router = self
             .shared
@@ -622,8 +620,8 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                 // Same as `wildcard_subscriptions_available`
                 // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901092
                 subscription_identifiers_available: Some(0),
-                // TODO: support retained messages
-                retain_available: Some(0),
+                // Signal support for retained messages (same as `wildcard_subscriptions_available`)
+                retain_available: None,
                 topic_alias_max: Some(TOPIC_ALIAS_MAX),
                 server_keep_alive: (requested_keep_alive != self.keep_alive)
                     .then(|| self.keep_alive.as_seconds()),
@@ -940,8 +938,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
     }
 
     async fn recv(&mut self) -> Result<Option<Packet>, ConnectionError> {
+        let mut protocol = self.protocol;
+        self.recv_with(|read_buf| protocol.read_mut(read_buf, usize::MAX))
+            .await
+    }
+
+    async fn recv_with<T: Debug>(
+        &mut self,
+        mut parse: impl FnMut(&mut BytesMut) -> Result<T, protocol::Error>,
+    ) -> Result<Option<T>, ConnectionError> {
         loop {
-            let mut read_len = match self.protocol.read_mut(&mut self.read_buf, usize::MAX) {
+            let mut read_len = match parse(&mut self.read_buf) {
                 Ok(packet) => {
                     tracing::trace!(?packet, "received");
                     // Don't reset the read timeout until a full packet has been read.
