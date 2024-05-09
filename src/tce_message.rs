@@ -150,6 +150,7 @@ impl PublishMeta {
     /// quality of service takes 2 bits, there are two mental models for this shift:
     /// move the leftmost bit from bit 1 to bit 5, shift the rightmost bit to bit 4.
     const QOS_SHIFT: u8 = 5 - 1;
+    const QOS_MASK: u8 = 0b11 << Self::QOS_SHIFT;
 
     pub fn new(qos: QoS, retain: bool, dup: bool) -> Self {
         debug_assert_ne!(
@@ -243,6 +244,24 @@ impl PublishMeta {
         match Self::unpack_qos(self.0) {
             Some(it) => it,
             None => unreachable!(),
+        }
+    }
+
+    pub fn with_qos(self, qos: QoS) -> Self {
+        debug_assert_ne!(
+            (qos, self.dup()),
+            (QoS::AtMostOnce, true),
+            "`dup` bit should not be set for QoS 0"
+        );
+
+        Self((self.0 & !Self::QOS_MASK) | Self::pack_qos(qos))
+    }
+
+    // Analogous to how `Vec::truncate(x)` does nothing if `x >= self.len()`
+    /// If `qos > self.qos()`, set `*self = self.with_qos(qos)`, otherwise do nothing.
+    pub fn increase_qos_to(&mut self, qos: QoS) {
+        if qos > self.qos() {
+            *self = self.with_qos(qos);
         }
     }
 }
@@ -428,6 +447,12 @@ mod tests {
         // QoS 0 should never have `dup = true`.
 
         // QoS 1
+        let meta = meta.with_qos(QoS::AtLeastOnce);
+        assert_eq!(meta.0, 0b0110_0000);
+        assert_eq!(meta.qos(), QoS::AtLeastOnce);
+        assert!(meta.retain());
+        assert!(!meta.dup());
+
         let meta = PublishMeta::new(QoS::AtLeastOnce, true, true);
         assert_eq!(dbg!(meta).0, 0b1110_0000);
         assert_eq!(meta.qos(), QoS::AtLeastOnce);
@@ -447,6 +472,12 @@ mod tests {
         assert!(!meta.dup());
 
         // QoS 2
+        let meta = meta.with_qos(QoS::ExactlyOnce);
+        assert_eq!(dbg!(meta).0, 0b0011_0000);
+        assert_eq!(meta.qos(), QoS::ExactlyOnce);
+        assert!(!meta.retain());
+        assert!(!meta.dup());
+
         let meta = PublishMeta::new(QoS::ExactlyOnce, false, true);
         assert_eq!(meta.0, 0b1011_0000);
         assert_eq!(meta.qos(), QoS::ExactlyOnce);
@@ -462,6 +493,13 @@ mod tests {
         let meta = meta.with_dup(false);
         assert_eq!(meta.0, 0b0111_0000);
         assert_eq!(meta.qos(), QoS::ExactlyOnce);
+        assert!(meta.retain());
+        assert!(!meta.dup());
+
+        // Back to 0 using `.with_qos()`
+        let meta = meta.with_qos(QoS::AtMostOnce);
+        assert_eq!(meta.0, 0b0100_0000);
+        assert_eq!(meta.qos(), QoS::AtMostOnce);
         assert!(meta.retain());
         assert!(!meta.dup());
     }

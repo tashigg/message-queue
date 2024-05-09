@@ -125,6 +125,10 @@ impl FixedHeader {
         }
     }
 
+    pub fn fixed_header_len(&self) -> usize {
+        self.fixed_header_len
+    }
+
     /// Returns the size of full packet (fixed header + variable header + payload)
     /// Fixed header is enough to get the size of a frame in the stream
     pub fn frame_length(&self) -> usize {

@@ -141,9 +141,9 @@ mod properties {
 
 fn reason(code: u8) -> Result<SubscribeReasonCode, Error> {
     let v = match code {
-        0 => SubscribeReasonCode::QoS0,
-        1 => SubscribeReasonCode::QoS1,
-        2 => SubscribeReasonCode::QoS2,
+        0 => SubscribeReasonCode::Success(QoS::AtMostOnce),
+        1 => SubscribeReasonCode::Success(QoS::AtLeastOnce),
+        2 => SubscribeReasonCode::Success(QoS::ExactlyOnce),
         128 => SubscribeReasonCode::Unspecified,
         131 => SubscribeReasonCode::ImplementationSpecific,
         135 => SubscribeReasonCode::NotAuthorized,
@@ -163,9 +163,6 @@ fn code(value: SubscribeReasonCode) -> u8 {
     match value {
         SubscribeReasonCode::Success(qos) => qos as u8,
         SubscribeReasonCode::Failure => 0x80,
-        SubscribeReasonCode::QoS0 => 0,
-        SubscribeReasonCode::QoS1 => 1,
-        SubscribeReasonCode::QoS2 => 2,
         SubscribeReasonCode::Unspecified => 128,
         SubscribeReasonCode::ImplementationSpecific => 131,
         SubscribeReasonCode::NotAuthorized => 135,

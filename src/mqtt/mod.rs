@@ -4,10 +4,13 @@
 //!
 //! The protocol specification for MQTT v5 can be found at:
 //! https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html
+use bytes::BytesMut;
 pub use rumqttd_protocol as protocol;
 
 pub mod broker;
 pub mod client_id;
+
+mod connect;
 
 mod session;
 pub mod trie;
@@ -25,6 +28,7 @@ mod packets;
 
 pub use client_id::ClientId;
 pub use keep_alive::KeepAlive;
+use rumqttd_protocol::{Packet, Protocol};
 
 slotmap::new_key_type! {
     struct ConnectionId;
@@ -40,3 +44,40 @@ slotmap::new_key_type! {
 ///
 /// https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901010
 pub const MAX_STRING_LEN: usize = 65535;
+
+/// Runtime-polymorphic `Protocol` for dynamic MQTT protocol versioning.
+///
+/// Considered alternatives:
+/// * `Box<dyn Protocol>`
+///    * Pro: wouldn't allocate because `V4` and `V5` are both zero-sized.
+///    * Con: two pointers wide instead of one byte
+///    * Con: dynamic dispatch often acts as a pessimization
+/// * `P: Protocol` parameter on `Connection`
+///     * Pro: statically dispatched
+///     * Con: Would require a completely separate code path for handling the `CONNECT` packet
+///     * Con: codegen blowup from monomorphization (on top of the `S` parameter of `Connection`)
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum DynProtocol {
+    V4,
+    V5,
+}
+
+impl Protocol for DynProtocol {
+    fn read_mut(
+        &mut self,
+        stream: &mut BytesMut,
+        max_size: usize,
+    ) -> Result<Packet, protocol::Error> {
+        match self {
+            Self::V5 => protocol::v5::V5.read_mut(stream, max_size),
+            Self::V4 => protocol::v4::V4.read_mut(stream, max_size),
+        }
+    }
+
+    fn write(&self, packet: Packet, write: &mut BytesMut) -> Result<usize, protocol::Error> {
+        match self {
+            Self::V5 => protocol::v5::V5.write(packet, write),
+            Self::V4 => protocol::v4::V4.write(packet, write),
+        }
+    }
+}

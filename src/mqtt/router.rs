@@ -55,6 +55,8 @@ pub struct RouterConnection {
 #[derive(Debug, Clone)]
 pub struct FilterProperties {
     pub qos: QoS,
+    // TODO: respect this flag
+    #[allow(dead_code)]
     pub nolocal: bool,
     pub preserve_retain: bool,
     pub retain_forward_rule: RetainForwardRule,
