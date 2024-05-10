@@ -147,7 +147,7 @@ struct Shared {
     password_hasher: PasswordHashingPool,
     users: UsersConfig,
     broker_tx: mpsc::Sender<BrokerEvent>,
-    tce_platform: Arc<Platform>,
+    tce_platform: Option<Arc<Platform>>,
     router: RouterHandle,
 
     max_keep_alive: KeepAlive,
@@ -171,8 +171,8 @@ impl MqttBroker {
         listen_addr: SocketAddr,
         tls_config: Option<TlsConfig>,
         users: UsersConfig,
-        tce_platform: Arc<Platform>,
-        tce_messages: MessageStream,
+        tce_platform: Option<Arc<Platform>>,
+        tce_messages: Option<MessageStream>,
         max_keep_alive: KeepAlive,
     ) -> crate::Result<Self> {
         let listener = TcpListener::bind(listen_addr)
@@ -244,7 +244,7 @@ impl MqttBroker {
         let tce_platform = self.shared.tce_platform.clone();
 
         while !shutdown {
-            let tls_listner_fut =
+            let tls_listener_fut =
                 OptionFuture::from(self.tls.as_ref().map(|it| it.listener.accept()));
 
             tokio::select! {
@@ -259,7 +259,10 @@ impl MqttBroker {
                     }
 
                     self.connections.remove(conn_id);
-                    handle_connection_lost(&mut self.inactive_sessions, &mut self.router, &self.shared.tce_platform, data);
+
+                    if let Some(ref tce_platform) = self.shared.tce_platform{
+                        handle_connection_lost(&mut self.inactive_sessions, &mut self.router, tce_platform, data);
+                    }
 
                     if let Some(takeover) = self.pending_session_takeovers.remove(&conn_id) {
                         self.handle_session_takeover(takeover);
@@ -268,7 +271,7 @@ impl MqttBroker {
                 res = self.listener.accept() => {
                     self.handle_accept(res);
                 }
-                Some(res) = tls_listner_fut => {
+                Some(res) = tls_listener_fut => {
                     self.handle_tls_accept(res).await;
                 }
                 Some(event) = self.broker_rx.recv() => {
@@ -281,7 +284,7 @@ impl MqttBroker {
                 Some(event) = self.inactive_sessions.next_event() => {
                     self.handle_inactive_session_event(event)?;
                 }
-                Ok(permit) = tce_platform.reserve_tx(), if !self.pending_wills.is_empty() => {
+                Some(Ok(permit)) = OptionFuture::from(tce_platform.as_ref().map(|k| k.reserve_tx())) , if !self.pending_wills.is_empty() => {
                     // technically a bug if this fails, but it doesn't really matter.
                     if let Some(will) = self.pending_wills.pop_front() {
                         dispatch_will(&mut self.router, permit, will.client_id, will.client_idx, will.will)
@@ -306,28 +309,22 @@ impl MqttBroker {
         match event {
             // if we have other on-expiration actions, now would be the time to do them.
             super::session::Event::Expiration(_, session) => {
-                // currently the only on-expiration event is publishing the `last_will`.
-                if let Some(will) = session.last_will {
-                    execute_will(
-                        &mut self.router,
-                        &self.shared.tce_platform,
-                        client_id,
-                        client_idx,
-                        will,
-                    );
+                if let Some(tce_platform) = self.shared.tce_platform.as_ref() {
+                    // currently the only on-expiration event is publishing the `last_will`.
+                    if let Some(will) = session.last_will {
+                        execute_will(&mut self.router, tce_platform, client_id, client_idx, will);
+                    }
                 }
 
                 self.router.evict_client(client_idx);
                 self.clients.remove(client_idx);
             }
 
-            super::session::Event::WillElapsed(_, will) => execute_will(
-                &mut self.router,
-                &self.shared.tce_platform,
-                client_id,
-                client_idx,
-                will,
-            ),
+            super::session::Event::WillElapsed(_, will) => {
+                if let Some(tce_platform) = self.shared.tce_platform.as_ref() {
+                    execute_will(&mut self.router, tce_platform, client_id, client_idx, will)
+                }
+            }
         }
 
         Ok(())
@@ -425,14 +422,16 @@ impl MqttBroker {
                 None
             }
             (true, Some(mut store)) => {
-                if let Some(last_will) = store.session.last_will.take() {
-                    execute_will(
-                        &mut self.router,
-                        &self.shared.tce_platform,
-                        client_id,
-                        client_index,
-                        last_will,
-                    )
+                if let Some(ref tce_platform) = self.shared.tce_platform {
+                    if let Some(last_will) = store.session.last_will.take() {
+                        execute_will(
+                            &mut self.router,
+                            tce_platform,
+                            client_id,
+                            client_index,
+                            last_will,
+                        )
+                    }
                 }
 
                 tracing::trace!(%client_id, "existing session was dropped");
@@ -541,14 +540,11 @@ impl MqttBroker {
 
         self.token.cancel();
 
-        while let Some(Ok(data)) = tasks.join_next().await {
-            handle_connection_lost(
-                &mut inactive_sessions,
-                &mut router,
-                &shared.tce_platform,
-                data,
-            );
-            tracing::info!("{} connections remaining", tasks.len());
+        if let Some(ref tce_platform) = shared.tce_platform {
+            while let Some(Ok(data)) = tasks.join_next().await {
+                handle_connection_lost(&mut inactive_sessions, &mut router, tce_platform, data);
+                tracing::info!("{} connections remaining", tasks.len());
+            }
         }
 
         Ok(())

@@ -5,8 +5,8 @@ use std::ops::{Index, IndexMut};
 use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
-use color_eyre::eyre;
 use color_eyre::eyre::WrapErr;
+use color_eyre::eyre::{self};
 use der::Decode;
 use slotmap::SecondaryMap;
 use tashi_collections::{HashMap, HashSet};
@@ -66,8 +66,8 @@ pub struct SubscriptionId(NonZeroU32);
 
 impl MqttRouter {
     pub fn start(
-        tce_platform: Arc<Platform>,
-        tce_messages: MessageStream,
+        tce_platform: Option<Arc<Platform>>,
+        tce_messages: Option<MessageStream>,
         token: CancellationToken,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
@@ -78,6 +78,13 @@ impl MqttRouter {
             .set(system_tx.clone())
             .expect("BUG: MqttRouter initialized more than once!");
 
+        let tce = tce_messages
+            .zip(tce_platform)
+            .map(|(tce_messages, tce_platform)| Tce {
+                tce_messages,
+                tce_platform,
+            });
+
         let state = RouterState {
             token,
             clients: SecondaryMap::new(),
@@ -86,8 +93,7 @@ impl MqttRouter {
             retained_messages: RetainedMessages::default(),
             command_rx,
             system_rx,
-            tce_platform,
-            tce_messages,
+            tce,
         };
 
         // `rumqttd` runs their router in its own thread, we could do that here
@@ -334,6 +340,10 @@ struct RouterState {
 
     retained_messages: RetainedMessages,
 
+    tce: Option<Tce>,
+}
+
+struct Tce {
     tce_platform: Arc<Platform>,
     tce_messages: MessageStream,
 }
@@ -497,6 +507,8 @@ impl ClientState {
 /// A filter has an invalid namespace for the server.
 struct InvalidSubscriptionKind;
 
+use futures::future::OptionFuture;
+
 // Experimenting with using free functions instead of methods for less right-drift in core logic.
 // Methods should be added to `RouterState` or its constituent types
 // when they make sense for directly updating some state.
@@ -518,13 +530,12 @@ async fn run(mut state: RouterState) -> crate::Result<()> {
                     msg.expect("BUG: system_rx cannot return None as its Sender is held in a `static`")
                 );
             }
-            res = state.tce_messages.next_message() => {
-                let Some(msg) = res.wrap_err("error from MessageStream")? else {
-                    tracing::debug!("Message stream closed; exiting.");
-                    break;
-                };
-
-                handle_message(&mut state, msg);
+            Some(res) = OptionFuture::from(state.tce.as_mut().map(|k| k.tce_messages.next_message())) => {
+                    let Some(msg) = res.wrap_err("error from MessageStream")? else {
+                        tracing::debug!("Message stream closed; exiting.");
+                        break;
+                    };
+                    handle_message(&mut state, msg)
             }
             _ = state.token.cancelled() => {
                 break;
@@ -781,7 +792,8 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
             }) => {
                 let publish = Arc::new(publish);
 
-                if &event.creator != state.tce_platform.creator_id() {
+                // this function won't be called unless a tce_platform is available
+                if &event.creator != state.tce.as_mut().unwrap().tce_platform.creator_id() {
                     // Locally sent messages would have been dispatched directly
                     dispatch(
                         state,
