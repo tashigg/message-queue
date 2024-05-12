@@ -756,20 +756,23 @@ fn handle_subscribe(
 }
 
 fn handle_message(state: &mut RouterState, message: Message) {
-    match message {
-        Message::SyncPoint(sync_point) => {
-            // TODO: handle sync points
-            // TODO: serialize retained messages [TG-492]
-            tracing::debug!(?sync_point, "received sync point");
-        }
-        Message::Event(event) => {
-            handle_tce_event(state, event);
+    if let Some(tce) = state.tce.as_ref() {
+        let tce_platform = tce.tce_platform.clone();
+        match message {
+            Message::SyncPoint(sync_point) => {
+                // TODO: handle sync points
+                // TODO: serialize retained messages [TG-492]
+                tracing::debug!(?sync_point, "received sync point");
+            }
+            Message::Event(event) => {
+                handle_tce_event(state, event, &tce_platform);
+            }
         }
     }
 }
 
 #[tracing::instrument(skip_all, fields(creator=%event.creator, timestamp=event.timestamp_created()))]
-fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
+fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Platform) {
     let Some(consensus_timestamp) = event.timestamp_finalized else {
         return;
     };
@@ -792,8 +795,7 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
             }) => {
                 let publish = Arc::new(publish);
 
-                // this function won't be called unless a tce_platform is available
-                if &event.creator != state.tce.as_mut().unwrap().tce_platform.creator_id() {
+                if &event.creator != platform.creator_id() {
                     // Locally sent messages would have been dispatched directly
                     dispatch(
                         state,
