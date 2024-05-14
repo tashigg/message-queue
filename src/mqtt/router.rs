@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::{Index, IndexMut};
 use std::sync::{Arc, OnceLock};
+use std::time::{Instant, SystemTime};
 
 use bytes::Bytes;
 use color_eyre::eyre::WrapErr;
@@ -94,6 +95,8 @@ impl MqttRouter {
             command_rx,
             system_rx,
             tce,
+            startup_instant: Instant::now(),
+            startup_time: SystemTime::now(),
         };
 
         // `rumqttd` runs their router in its own thread, we could do that here
@@ -339,6 +342,10 @@ struct RouterState {
     system_rx: mpsc::UnboundedReceiver<SystemCommand>,
 
     retained_messages: RetainedMessages,
+
+    startup_time: SystemTime,
+
+    startup_instant: Instant,
 
     tce: Option<Tce>,
 }
@@ -894,6 +901,30 @@ fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: Pu
             }
         },
     };
+
+    // Only run this if TCE is not available.
+    if state.tce.is_none() && publish.meta.retain() {
+        let time_now = state.startup_time + state.startup_instant.elapsed();
+
+        if let Ok(Ok(timestamp_nanos)) = time_now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|k| u64::try_from(k.as_nanos()))
+        {
+            if !publish.payload.0.is_empty() {
+                state
+                    .retained_messages
+                    .insert(timestamp_nanos, 0, publish.clone());
+            } else {
+                // Empty payload means clear the retained message.
+                state.retained_messages.remove(&publish.topic);
+            }
+        } else {
+            panic!(
+                "BUG: system time was set before unix epoch: {:?} or failed to parse to u64",
+                time_now
+            )
+        }
+    }
 
     // Validate restricted topic against the publish origin
     let kind = if topic.root().starts_with('$') {

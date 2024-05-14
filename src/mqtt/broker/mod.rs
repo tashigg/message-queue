@@ -287,7 +287,7 @@ impl MqttBroker {
                 Some(Ok(permit)) = OptionFuture::from(tce_platform.as_ref().map(|k| k.reserve_tx())) , if !self.pending_wills.is_empty() => {
                     // technically a bug if this fails, but it doesn't really matter.
                     if let Some(will) = self.pending_wills.pop_front() {
-                        dispatch_will(&mut self.router, permit, will.client_id, will.client_idx, will.will)
+                        dispatch_will(&mut self.router, Some(permit), will.client_id, will.client_idx, will.will)
                     }
                 }
             }
@@ -309,22 +309,28 @@ impl MqttBroker {
         match event {
             // if we have other on-expiration actions, now would be the time to do them.
             super::session::Event::Expiration(_, session) => {
-                if let Some(tce_platform) = self.shared.tce_platform.as_ref() {
-                    // currently the only on-expiration event is publishing the `last_will`.
-                    if let Some(will) = session.last_will {
-                        execute_will(&mut self.router, tce_platform, client_id, client_idx, will);
-                    }
+                // currently the only on-expiration event is publishing the `last_will`.
+                if let Some(will) = session.last_will {
+                    execute_will(
+                        &mut self.router,
+                        self.shared.tce_platform.as_deref(),
+                        client_id,
+                        client_idx,
+                        will,
+                    );
                 }
 
                 self.router.evict_client(client_idx);
                 self.clients.remove(client_idx);
             }
 
-            super::session::Event::WillElapsed(_, will) => {
-                if let Some(tce_platform) = self.shared.tce_platform.as_ref() {
-                    execute_will(&mut self.router, tce_platform, client_id, client_idx, will)
-                }
-            }
+            super::session::Event::WillElapsed(_, will) => execute_will(
+                &mut self.router,
+                self.shared.tce_platform.as_deref(),
+                client_id,
+                client_idx,
+                will,
+            ),
         }
 
         Ok(())
@@ -422,16 +428,14 @@ impl MqttBroker {
                 None
             }
             (true, Some(mut store)) => {
-                if let Some(ref tce_platform) = self.shared.tce_platform {
-                    if let Some(last_will) = store.session.last_will.take() {
-                        execute_will(
-                            &mut self.router,
-                            tce_platform,
-                            client_id,
-                            client_index,
-                            last_will,
-                        )
-                    }
+                if let Some(last_will) = store.session.last_will.take() {
+                    execute_will(
+                        &mut self.router,
+                        self.shared.tce_platform.as_deref(),
+                        client_id,
+                        client_index,
+                        last_will,
+                    )
                 }
 
                 tracing::trace!(%client_id, "existing session was dropped");
@@ -698,7 +702,7 @@ fn handle_connection_lost(
                 return;
             };
 
-            execute_will(router, tce_platform, client_id, client_index, will)
+            execute_will(router, Some(tce_platform), client_id, client_index, will)
         }
     }
 }
@@ -726,7 +730,7 @@ fn try_reserve_will(
 }
 fn dispatch_will(
     router: &mut MqttRouter,
-    permit: TxnPermit<'_>,
+    permit: Option<TxnPermit<'_>>,
     client_id: ClientId,
     client_idx: ClientIndex,
     mut will: Will,
@@ -752,7 +756,9 @@ fn dispatch_will(
         }
     };
 
-    permit.send(txn);
+    if let Some(permit) = permit {
+        permit.send(txn);
+    }
 
     // *sigh*, we need to wrap the transaction to send it over TCE, but we need to unwrap it again right after to publish a will.
     // When/if we have multiple transaction types this is going to need an `unreachable!()` :/
@@ -763,14 +769,21 @@ fn dispatch_will(
 
 fn execute_will(
     router: &mut MqttRouter,
-    tce_platform: &Platform,
+    tce_platform: Option<&Platform>,
     client_id: ClientId,
     client_idx: ClientIndex,
     will: Will,
 ) {
-    match try_reserve_will(tce_platform, client_id, will.transaction.meta.qos()) {
-        Ok(None) => {}
-        Ok(Some(permit)) => dispatch_will(router, permit, client_id, client_idx, will),
-        Err(()) => todo!("will reserve full"),
-    };
+    match tce_platform {
+        Some(tce_platform) => {
+            match try_reserve_will(tce_platform, client_id, will.transaction.meta.qos()) {
+                Ok(None) => {}
+                Ok(Some(permit)) => {
+                    dispatch_will(router, Some(permit), client_id, client_idx, will)
+                }
+                Err(()) => todo!("will reserve full"),
+            };
+        }
+        None => dispatch_will(router, None, client_id, client_idx, will),
+    }
 }
