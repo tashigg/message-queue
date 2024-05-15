@@ -247,6 +247,9 @@ impl MqttBroker {
             let tls_listener_fut =
                 OptionFuture::from(self.tls.as_ref().map(|it| it.listener.accept()));
 
+            let tcd_platform_fut =
+                OptionFuture::from(tce_platform.as_ref().map(|k| k.reserve_tx()));
+
             tokio::select! {
                 _ = self.token.cancelled() => {
                     shutdown = true;
@@ -260,9 +263,7 @@ impl MqttBroker {
 
                     self.connections.remove(conn_id);
 
-                    if let Some(ref tce_platform) = self.shared.tce_platform{
-                        handle_connection_lost(&mut self.inactive_sessions, &mut self.router, tce_platform, data);
-                    }
+                    handle_connection_lost(&mut self.inactive_sessions, &mut self.router, self.shared.tce_platform.as_deref(), data);
 
                     if let Some(takeover) = self.pending_session_takeovers.remove(&conn_id) {
                         self.handle_session_takeover(takeover);
@@ -284,7 +285,7 @@ impl MqttBroker {
                 Some(event) = self.inactive_sessions.next_event() => {
                     self.handle_inactive_session_event(event)?;
                 }
-                Some(Ok(permit)) = OptionFuture::from(tce_platform.as_ref().map(|k| k.reserve_tx())) , if !self.pending_wills.is_empty() => {
+                Some(Ok(permit)) = tcd_platform_fut, if !self.pending_wills.is_empty() => {
                     // technically a bug if this fails, but it doesn't really matter.
                     if let Some(will) = self.pending_wills.pop_front() {
                         dispatch_will(&mut self.router, Some(permit), will.client_id, will.client_idx, will.will)
@@ -544,13 +545,15 @@ impl MqttBroker {
 
         self.token.cancel();
 
-        if let Some(ref tce_platform) = shared.tce_platform {
-            while let Some(Ok(data)) = tasks.join_next().await {
-                handle_connection_lost(&mut inactive_sessions, &mut router, tce_platform, data);
-                tracing::info!("{} connections remaining", tasks.len());
-            }
+        while let Some(Ok(data)) = tasks.join_next().await {
+            handle_connection_lost(
+                &mut inactive_sessions,
+                &mut router,
+                shared.tce_platform.as_deref(),
+                data,
+            );
+            tracing::info!("{} connections remaining", tasks.len());
         }
-
         Ok(())
     }
 }
@@ -674,7 +677,7 @@ impl Clients {
 fn handle_connection_lost(
     inactive_sessions: &mut InactiveSessions,
     router: &mut MqttRouter,
-    tce_platform: &Platform,
+    tce_platform: Option<&Platform>,
     data: ConnectionData,
 ) {
     let ConnectionData {
@@ -702,7 +705,7 @@ fn handle_connection_lost(
                 return;
             };
 
-            execute_will(router, Some(tce_platform), client_id, client_index, will)
+            execute_will(router, tce_platform, client_id, client_index, will)
         }
     }
 }

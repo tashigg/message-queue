@@ -522,6 +522,9 @@ use futures::future::OptionFuture;
 #[tracing::instrument(name = "router", skip(state))]
 async fn run(mut state: RouterState) -> crate::Result<()> {
     loop {
+        let tce_msgs_fut =
+            OptionFuture::from(state.tce.as_mut().map(|k| k.tce_messages.next_message()));
+
         tokio::select! {
             msg = state.command_rx.recv() => {
                 let Some((client, cmd)) = msg else {
@@ -537,7 +540,7 @@ async fn run(mut state: RouterState) -> crate::Result<()> {
                     msg.expect("BUG: system_rx cannot return None as its Sender is held in a `static`")
                 );
             }
-            Some(res) = OptionFuture::from(state.tce.as_mut().map(|k| k.tce_messages.next_message())) => {
+            Some(res) = tce_msgs_fut => {
                     let Some(msg) = res.wrap_err("error from MessageStream")? else {
                         tracing::debug!("Message stream closed; exiting.");
                         break;
