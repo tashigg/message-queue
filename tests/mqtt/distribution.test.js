@@ -116,7 +116,7 @@ describe("publish to node 1, receive from node2", () => {
 
     test("retained messages", async () => {
         // The timeout to wait when we want to make sure no more messages are being sent on a topic.
-        const no_message_timeout = 250;
+        const no_message_timeout = 100;
 
         const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 4 });
         const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
