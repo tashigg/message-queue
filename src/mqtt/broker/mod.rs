@@ -262,8 +262,13 @@ impl MqttBroker {
                     }
 
                     self.connections.remove(conn_id);
-
-                    handle_connection_lost(&mut self.inactive_sessions, &mut self.router, self.shared.tce_platform.as_deref(), data);
+                    handle_connection_lost(
+                        &mut self.inactive_sessions,
+                        &mut self.router,
+                        self.shared.tce_platform.as_deref(),
+                        &mut self.pending_wills,
+                        data
+                    );
 
                     if let Some(takeover) = self.pending_session_takeovers.remove(&conn_id) {
                         self.handle_session_takeover(takeover);
@@ -315,6 +320,7 @@ impl MqttBroker {
                     execute_will(
                         &mut self.router,
                         self.shared.tce_platform.as_deref(),
+                        &mut self.pending_wills,
                         client_id,
                         client_idx,
                         will,
@@ -328,6 +334,7 @@ impl MqttBroker {
             super::session::Event::WillElapsed(_, will) => execute_will(
                 &mut self.router,
                 self.shared.tce_platform.as_deref(),
+                &mut self.pending_wills,
                 client_id,
                 client_idx,
                 will,
@@ -433,6 +440,7 @@ impl MqttBroker {
                     execute_will(
                         &mut self.router,
                         self.shared.tce_platform.as_deref(),
+                        &mut self.pending_wills,
                         client_id,
                         client_index,
                         last_will,
@@ -535,6 +543,7 @@ impl MqttBroker {
             mut tasks,
             mut inactive_sessions,
             mut router,
+            mut pending_wills,
             shared,
             ..
         } = self;
@@ -550,6 +559,7 @@ impl MqttBroker {
                 &mut inactive_sessions,
                 &mut router,
                 shared.tce_platform.as_deref(),
+                &mut pending_wills,
                 data,
             );
             tracing::info!("{} connections remaining", tasks.len());
@@ -678,6 +688,7 @@ fn handle_connection_lost(
     inactive_sessions: &mut InactiveSessions,
     router: &mut MqttRouter,
     tce_platform: Option<&Platform>,
+    pending_wills: &mut VecDeque<PendingWill>,
     data: ConnectionData,
 ) {
     let ConnectionData {
@@ -705,7 +716,14 @@ fn handle_connection_lost(
                 return;
             };
 
-            execute_will(router, tce_platform, client_id, client_index, will)
+            execute_will(
+                router,
+                tce_platform,
+                pending_wills,
+                client_id,
+                client_index,
+                will,
+            )
         }
     }
 }
@@ -773,6 +791,7 @@ fn dispatch_will(
 fn execute_will(
     router: &mut MqttRouter,
     tce_platform: Option<&Platform>,
+    pending_wills: &mut VecDeque<PendingWill>,
     client_id: ClientId,
     client_idx: ClientIndex,
     will: Will,
@@ -784,7 +803,11 @@ fn execute_will(
                 Ok(Some(permit)) => {
                     dispatch_will(router, Some(permit), client_id, client_idx, will)
                 }
-                Err(()) => todo!("will reserve full"),
+                Err(()) => pending_wills.push_back(PendingWill {
+                    client_id,
+                    client_idx,
+                    will,
+                }),
             };
         }
         None => dispatch_will(router, None, client_id, client_idx, will),
