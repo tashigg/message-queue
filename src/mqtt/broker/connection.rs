@@ -608,20 +608,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             },
             Some(ConnAckProperties {
                 assigned_client_identifier: response.assigned_client_id.map(Into::into),
-                // A value is 0 means that Wildcard Subscriptions are not supported.
-                // A value of 1 means Wildcard Subscriptions are supported.
-                // If not present, then Wildcard Subscriptions are supported.
-                // (I know it's just one byte, but why waste the bandwidth if `true` is the default?)
-                //
-                // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901091
-                wildcard_subscription_available: None,
+                wildcard_subscription_available: true,
                 // TODO: support shared subscriptions
-                shared_subscription_available: Some(0),
-                // Same as `wildcard_subscriptions_available`
-                // https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901092
-                subscription_identifiers_available: Some(0),
-                // Signal support for retained messages (same as `wildcard_subscriptions_available`)
-                retain_available: None,
+                shared_subscription_available: false,
+                subscription_identifiers_available: true,
+                retain_available: true,
                 topic_alias_max: Some(TOPIC_ALIAS_MAX),
                 server_keep_alive: (requested_keep_alive != self.keep_alive)
                     .then(|| self.keep_alive.as_seconds()),
