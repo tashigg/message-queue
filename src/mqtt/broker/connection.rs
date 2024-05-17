@@ -728,26 +728,27 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
         tracing::trace!("submitting transaction: {transaction:?}");
 
-        self.shared
-            .tce_platform
-            .reserve_tx()
-            .await
-            // If this fails, we'll drop the connection without sending a PUBACK/PUBREC,
-            // so the client will know we died before taking ownership and can try another broker.
-            .or_else(|_| disconnect!(ServerShuttingDown, "broker shutting down"))?
-            .send(
-                transaction
-                    .to_der()
-                    .map_err(Into::into)
-                    .and_then(|it| it.try_into())
-                    .or_else(|e| {
-                        tracing::error!(?transaction, ?e, "failed to encode transaction");
-                        disconnect!(
-                            ProtocolError,
-                            "PUBLISH exceeded consensus protocol size limit"
-                        );
-                    })?,
-            );
+        if let Some(tce_platform) = &self.shared.tce_platform {
+            tce_platform
+                .reserve_tx()
+                .await
+                // If this fails, we'll drop the connection without sending a PUBACK/PUBREC,
+                // so the client will know we died before taking ownership and can try another broker.
+                .or_else(|_| disconnect!(ServerShuttingDown, "broker shutting down"))?
+                .send(
+                    transaction
+                        .to_der()
+                        .map_err(Into::into)
+                        .and_then(|it| it.try_into())
+                        .or_else(|e| {
+                            tracing::error!(?transaction, ?e, "failed to encode transaction");
+                            disconnect!(
+                                ProtocolError,
+                                "PUBLISH exceeded consensus protocol size limit"
+                            );
+                        })?,
+                );
+        }
 
         router.transaction(transaction).await;
 

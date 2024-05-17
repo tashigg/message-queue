@@ -3,10 +3,11 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::{Index, IndexMut};
 use std::sync::{Arc, OnceLock};
+use std::time::{Instant, SystemTime};
 
 use bytes::Bytes;
-use color_eyre::eyre;
 use color_eyre::eyre::WrapErr;
+use color_eyre::eyre::{self};
 use der::Decode;
 use slotmap::SecondaryMap;
 use tashi_collections::{HashMap, HashSet};
@@ -66,8 +67,8 @@ pub struct SubscriptionId(NonZeroU32);
 
 impl MqttRouter {
     pub fn start(
-        tce_platform: Arc<Platform>,
-        tce_messages: MessageStream,
+        tce_platform: Option<Arc<Platform>>,
+        tce_messages: Option<MessageStream>,
         token: CancellationToken,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
@@ -78,6 +79,13 @@ impl MqttRouter {
             .set(system_tx.clone())
             .expect("BUG: MqttRouter initialized more than once!");
 
+        let tce = tce_messages
+            .zip(tce_platform)
+            .map(|(tce_messages, tce_platform)| Tce {
+                tce_messages,
+                tce_platform,
+            });
+
         let state = RouterState {
             token,
             clients: SecondaryMap::new(),
@@ -86,8 +94,9 @@ impl MqttRouter {
             retained_messages: RetainedMessages::default(),
             command_rx,
             system_rx,
-            tce_platform,
-            tce_messages,
+            tce,
+            startup_instant: Instant::now(),
+            startup_time: SystemTime::now(),
         };
 
         // `rumqttd` runs their router in its own thread, we could do that here
@@ -334,6 +343,14 @@ struct RouterState {
 
     retained_messages: RetainedMessages,
 
+    startup_time: SystemTime,
+
+    startup_instant: Instant,
+
+    tce: Option<Tce>,
+}
+
+struct Tce {
     tce_platform: Arc<Platform>,
     tce_messages: MessageStream,
 }
@@ -497,12 +514,17 @@ impl ClientState {
 /// A filter has an invalid namespace for the server.
 struct InvalidSubscriptionKind;
 
+use futures::future::OptionFuture;
+
 // Experimenting with using free functions instead of methods for less right-drift in core logic.
 // Methods should be added to `RouterState` or its constituent types
 // when they make sense for directly updating some state.
 #[tracing::instrument(name = "router", skip(state))]
 async fn run(mut state: RouterState) -> crate::Result<()> {
     loop {
+        let tce_msgs_fut =
+            OptionFuture::from(state.tce.as_mut().map(|k| k.tce_messages.next_message()));
+
         tokio::select! {
             msg = state.command_rx.recv() => {
                 let Some((client, cmd)) = msg else {
@@ -518,13 +540,12 @@ async fn run(mut state: RouterState) -> crate::Result<()> {
                     msg.expect("BUG: system_rx cannot return None as its Sender is held in a `static`")
                 );
             }
-            res = state.tce_messages.next_message() => {
-                let Some(msg) = res.wrap_err("error from MessageStream")? else {
-                    tracing::debug!("Message stream closed; exiting.");
-                    break;
-                };
-
-                handle_message(&mut state, msg);
+            Some(res) = tce_msgs_fut => {
+                    let Some(msg) = res.wrap_err("error from MessageStream")? else {
+                        tracing::debug!("Message stream closed; exiting.");
+                        break;
+                    };
+                    handle_message(&mut state, msg)
             }
             _ = state.token.cancelled() => {
                 break;
@@ -745,20 +766,23 @@ fn handle_subscribe(
 }
 
 fn handle_message(state: &mut RouterState, message: Message) {
-    match message {
-        Message::SyncPoint(sync_point) => {
-            // TODO: handle sync points
-            // TODO: serialize retained messages [TG-492]
-            tracing::debug!(?sync_point, "received sync point");
-        }
-        Message::Event(event) => {
-            handle_tce_event(state, event);
+    if let Some(tce) = state.tce.as_ref() {
+        let tce_platform = tce.tce_platform.clone();
+        match message {
+            Message::SyncPoint(sync_point) => {
+                // TODO: handle sync points
+                // TODO: serialize retained messages [TG-492]
+                tracing::debug!(?sync_point, "received sync point");
+            }
+            Message::Event(event) => {
+                handle_tce_event(state, event, &tce_platform);
+            }
         }
     }
 }
 
 #[tracing::instrument(skip_all, fields(creator=%event.creator, timestamp=event.timestamp_created()))]
-fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
+fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Platform) {
     let Some(consensus_timestamp) = event.timestamp_finalized else {
         return;
     };
@@ -781,7 +805,7 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
             }) => {
                 let publish = Arc::new(publish);
 
-                if &event.creator != state.tce_platform.creator_id() {
+                if &event.creator != platform.creator_id() {
                     // Locally sent messages would have been dispatched directly
                     dispatch(
                         state,
@@ -880,6 +904,30 @@ fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: Pu
             }
         },
     };
+
+    // Only run this if TCE is not available.
+    if state.tce.is_none() && publish.meta.retain() {
+        let time_now = state.startup_time + state.startup_instant.elapsed();
+
+        if let Ok(Ok(timestamp_nanos)) = time_now
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|k| u64::try_from(k.as_nanos()))
+        {
+            if !publish.payload.0.is_empty() {
+                state
+                    .retained_messages
+                    .insert(timestamp_nanos, 0, publish.clone());
+            } else {
+                // Empty payload means clear the retained message.
+                state.retained_messages.remove(&publish.topic);
+            }
+        } else {
+            panic!(
+                "BUG: system time was set before unix epoch: {:?} or failed to parse to u64",
+                time_now
+            )
+        }
+    }
 
     // Validate restricted topic against the publish origin
     let kind = if topic.root().starts_with('$') {

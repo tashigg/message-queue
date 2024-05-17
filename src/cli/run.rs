@@ -59,7 +59,7 @@ pub struct RunArgs {
 }
 
 #[derive(clap::Args, Debug, Clone)]
-#[group(required = true, multiple = false)]
+#[group(required = false, multiple = false)]
 pub struct SecretKeyOpt {
     /// Read the P-256 secret key used to identify this broker in the cluster from hex encoded DER.
     ///
@@ -114,14 +114,11 @@ impl SecretKeyOpt {
             return read_secret_key(path);
         }
 
-        unreachable!("BUG: Clap should have required one of `--secret-key` or `--secret-key-file`")
+        Ok(SecretKey::generate())
     }
 }
 
 pub fn main(args: RunArgs) -> crate::Result<()> {
-    // File and stdio aren't truly async in Tokio so we might as well do that before we even start the runtime
-    let addresses = config::addresses::read(&args.config_dir.join("address-book.toml"))?;
-
     let mut users = config::users::read(&args.config_dir.join("users.toml"))?;
 
     // Merge any auth overrides from the command-line.
@@ -144,8 +141,19 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
 
     let secret_key = args.secret_key.read_key()?;
 
-    let tce_config = create_tce_config(secret_key.clone(), &addresses)
-        .wrap_err("error initializing TCE config")?;
+    // File and stdio aren't truly async in Tokio so we might as well do that before we even start the runtime
+    let tce_config = match config::addresses::read(&args.config_dir.join("address-book.toml")) {
+        Ok(addresses) => {
+            let tce_config = create_tce_config(secret_key.clone(), &addresses)
+                .wrap_err("error initializing TCE config")?;
+
+            Some(tce_config)
+        }
+        Err(_) => {
+            tracing::info!("Running in non-clustered mode");
+            None
+        }
+    };
 
     let tls_config = args
         .tls_config
@@ -197,16 +205,21 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
 async fn main_async(
     args: RunArgs,
     users: UsersConfig,
-    tce_config: tashi_consensus_engine::Config,
+    tce_config: Option<tashi_consensus_engine::Config>,
     tls_config: Option<broker::TlsConfig>,
 ) -> crate::Result<()> {
-    let (tce_platform, tce_message_stream) = Platform::start(
-        tce_config,
-        QuicSocket::bind_udp(args.cluster_addr).await?,
-        false,
-    )?;
+    let (tce_platform, tce_message_stream) = match tce_config {
+        Some(tce_config) => {
+            let (tce_platform, tce_message_stream) = Platform::start(
+                tce_config,
+                QuicSocket::bind_udp(args.cluster_addr).await?,
+                false,
+            )?;
 
-    let tce_platform = Arc::new(tce_platform);
+            (Some(Arc::new(tce_platform)), Some(tce_message_stream))
+        }
+        None => (None, None),
+    };
 
     let mut broker = MqttBroker::bind(
         args.mqtt_addr,
@@ -226,7 +239,10 @@ async fn main_async(
 
             res = tokio::signal::ctrl_c() => {
                 res.wrap_err("error from ctrl_c() handler")?;
-                tce_platform.shutdown().await;
+
+                if let Some(platform) = tce_platform{
+                    platform.shutdown().await;
+                }
                 break;
             }
         }

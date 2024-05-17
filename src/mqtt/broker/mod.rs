@@ -147,7 +147,7 @@ struct Shared {
     password_hasher: PasswordHashingPool,
     users: UsersConfig,
     broker_tx: mpsc::Sender<BrokerEvent>,
-    tce_platform: Arc<Platform>,
+    tce_platform: Option<Arc<Platform>>,
     router: RouterHandle,
 
     max_keep_alive: KeepAlive,
@@ -171,8 +171,8 @@ impl MqttBroker {
         listen_addr: SocketAddr,
         tls_config: Option<TlsConfig>,
         users: UsersConfig,
-        tce_platform: Arc<Platform>,
-        tce_messages: MessageStream,
+        tce_platform: Option<Arc<Platform>>,
+        tce_messages: Option<MessageStream>,
         max_keep_alive: KeepAlive,
     ) -> crate::Result<Self> {
         let listener = TcpListener::bind(listen_addr)
@@ -244,8 +244,11 @@ impl MqttBroker {
         let tce_platform = self.shared.tce_platform.clone();
 
         while !shutdown {
-            let tls_listner_fut =
+            let tls_listener_fut =
                 OptionFuture::from(self.tls.as_ref().map(|it| it.listener.accept()));
+
+            let tcd_platform_fut =
+                OptionFuture::from(tce_platform.as_ref().map(|k| k.reserve_tx()));
 
             tokio::select! {
                 _ = self.token.cancelled() => {
@@ -259,7 +262,8 @@ impl MqttBroker {
                     }
 
                     self.connections.remove(conn_id);
-                    handle_connection_lost(&mut self.inactive_sessions, &mut self.router, &self.shared.tce_platform, data);
+
+                    handle_connection_lost(&mut self.inactive_sessions, &mut self.router, self.shared.tce_platform.as_deref(), data);
 
                     if let Some(takeover) = self.pending_session_takeovers.remove(&conn_id) {
                         self.handle_session_takeover(takeover);
@@ -268,7 +272,7 @@ impl MqttBroker {
                 res = self.listener.accept() => {
                     self.handle_accept(res);
                 }
-                Some(res) = tls_listner_fut => {
+                Some(res) = tls_listener_fut => {
                     self.handle_tls_accept(res).await;
                 }
                 Some(event) = self.broker_rx.recv() => {
@@ -281,10 +285,10 @@ impl MqttBroker {
                 Some(event) = self.inactive_sessions.next_event() => {
                     self.handle_inactive_session_event(event)?;
                 }
-                Ok(permit) = tce_platform.reserve_tx(), if !self.pending_wills.is_empty() => {
+                Some(Ok(permit)) = tcd_platform_fut, if !self.pending_wills.is_empty() => {
                     // technically a bug if this fails, but it doesn't really matter.
                     if let Some(will) = self.pending_wills.pop_front() {
-                        dispatch_will(&mut self.router, permit, will.client_id, will.client_idx, will.will)
+                        dispatch_will(&mut self.router, Some(permit), will.client_id, will.client_idx, will.will)
                     }
                 }
             }
@@ -310,7 +314,7 @@ impl MqttBroker {
                 if let Some(will) = session.last_will {
                     execute_will(
                         &mut self.router,
-                        &self.shared.tce_platform,
+                        self.shared.tce_platform.as_deref(),
                         client_id,
                         client_idx,
                         will,
@@ -323,7 +327,7 @@ impl MqttBroker {
 
             super::session::Event::WillElapsed(_, will) => execute_will(
                 &mut self.router,
-                &self.shared.tce_platform,
+                self.shared.tce_platform.as_deref(),
                 client_id,
                 client_idx,
                 will,
@@ -428,7 +432,7 @@ impl MqttBroker {
                 if let Some(last_will) = store.session.last_will.take() {
                     execute_will(
                         &mut self.router,
-                        &self.shared.tce_platform,
+                        self.shared.tce_platform.as_deref(),
                         client_id,
                         client_index,
                         last_will,
@@ -545,12 +549,11 @@ impl MqttBroker {
             handle_connection_lost(
                 &mut inactive_sessions,
                 &mut router,
-                &shared.tce_platform,
+                shared.tce_platform.as_deref(),
                 data,
             );
             tracing::info!("{} connections remaining", tasks.len());
         }
-
         Ok(())
     }
 }
@@ -674,7 +677,7 @@ impl Clients {
 fn handle_connection_lost(
     inactive_sessions: &mut InactiveSessions,
     router: &mut MqttRouter,
-    tce_platform: &Platform,
+    tce_platform: Option<&Platform>,
     data: ConnectionData,
 ) {
     let ConnectionData {
@@ -730,7 +733,7 @@ fn try_reserve_will(
 }
 fn dispatch_will(
     router: &mut MqttRouter,
-    permit: TxnPermit<'_>,
+    permit: Option<TxnPermit<'_>>,
     client_id: ClientId,
     client_idx: ClientIndex,
     mut will: Will,
@@ -756,7 +759,9 @@ fn dispatch_will(
         }
     };
 
-    permit.send(txn);
+    if let Some(permit) = permit {
+        permit.send(txn);
+    }
 
     // *sigh*, we need to wrap the transaction to send it over TCE, but we need to unwrap it again right after to publish a will.
     // When/if we have multiple transaction types this is going to need an `unreachable!()` :/
@@ -767,14 +772,21 @@ fn dispatch_will(
 
 fn execute_will(
     router: &mut MqttRouter,
-    tce_platform: &Platform,
+    tce_platform: Option<&Platform>,
     client_id: ClientId,
     client_idx: ClientIndex,
     will: Will,
 ) {
-    match try_reserve_will(tce_platform, client_id, will.transaction.meta.qos()) {
-        Ok(None) => {}
-        Ok(Some(permit)) => dispatch_will(router, permit, client_id, client_idx, will),
-        Err(()) => todo!("will reserve full"),
-    };
+    match tce_platform {
+        Some(tce_platform) => {
+            match try_reserve_will(tce_platform, client_id, will.transaction.meta.qos()) {
+                Ok(None) => {}
+                Ok(Some(permit)) => {
+                    dispatch_will(router, Some(permit), client_id, client_idx, will)
+                }
+                Err(()) => todo!("will reserve full"),
+            };
+        }
+        None => dispatch_will(router, None, client_id, client_idx, will),
+    }
 }

@@ -10,8 +10,8 @@ describe("publish to node 1, receive from node2", () => {
     // This way we can avoid any unintentional cross-pollination between tests.
     test("synchronously", async () => {
         // `protocolVersion` defaults to 4 (v3.1.1) otherwise
-        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", {protocolVersion: 5});
-        const client2 = await mqtt.connectAsync("mqtt://localhost:1884", {protocolVersion: 5});
+        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+        const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
 
         await client2.subscribeAsync("weather");
 
@@ -28,16 +28,16 @@ describe("publish to node 1, receive from node2", () => {
     });
 
     test("asynchronously, delivered on reconnect", async () => {
-        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", {protocolVersion: 5});
-        const client2 = await mqtt.connectAsync("mqtt://localhost:1884", {protocolVersion: 5});
+        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+        const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
 
-        await client2.subscribeAsync("weather/sacramento", {qos: 2});
+        await client2.subscribeAsync("weather/sacramento", { qos: 2 });
 
         await client2.endAsync();
 
         await client1.publishAsync("weather/sacramento", "sunny");
-        await client1.publishAsync("weather/sacramento", "cloudy", {qos: 1});
-        await client1.publishAsync("weather/sacramento", "rainy", {qos: 2});
+        await client1.publishAsync("weather/sacramento", "cloudy", { qos: 1 });
+        await client1.publishAsync("weather/sacramento", "rainy", { qos: 2 });
 
         client2.reconnect();
 
@@ -50,9 +50,9 @@ describe("publish to node 1, receive from node2", () => {
             console.log(topic.toString() + " message received: " + messageStr);
 
             if (packet.qos === 0) {
-                unorderedMessages.push({topic, message: messageStr, qos: packet.qos});
+                unorderedMessages.push({ topic, message: messageStr, qos: packet.qos });
             } else {
-                orderedMessages.push({topic, message: messageStr, qos: packet.qos});
+                orderedMessages.push({ topic, message: messageStr, qos: packet.qos });
             }
 
             if (messageStr === "rainy") {
@@ -69,15 +69,15 @@ describe("publish to node 1, receive from node2", () => {
         // Depending on the order that things actually happen, the QoS 0 message may not get delivered.
         if (unorderedMessages.length === 1) {
             expect(unorderedMessages).toEqual([
-                {topic: "weather/sacramento", message: "sunny", qos: 0}
+                { topic: "weather/sacramento", message: "sunny", qos: 0 }
             ])
         } else {
             expect(unorderedMessages).toEqual([]);
         }
 
         expect(orderedMessages).toEqual([
-            {topic: "weather/sacramento", message: "cloudy", qos: 1},
-            {topic: "weather/sacramento", message: "rainy", qos: 2},
+            { topic: "weather/sacramento", message: "cloudy", qos: 1 },
+            { topic: "weather/sacramento", message: "rainy", qos: 2 },
         ]);
     });
 
@@ -117,14 +117,14 @@ describe("publish to node 1, receive from node2", () => {
         // The timeout to wait when we want to make sure no more messages are being sent on a topic.
         const no_message_timeout = 250;
 
-        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", {protocolVersion: 5});
-        const client2 = await mqtt.connectAsync("mqtt://localhost:1884", {protocolVersion: 5});
+        const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+        const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
 
         console.log('sending retained messages');
-        await client1.publishAsync("tickers/eth/usd", "3107.60", {qos: 1, retain: true});
-        await client1.publishAsync("tickers/eth", '{ "usd": "3107.60" }', {qos: 1, retain: true});
-        await client1.publishAsync("tickers/btc/usd", "62838.80", {qos: 1, retain: true});
-        await client1.publishAsync("tickers/btc", '{ "usd": "62838.80" }', {qos: 1, retain: true});
+        await client1.publishAsync("tickers/eth/usd", "3107.60", { qos: 1, retain: true });
+        await client1.publishAsync("tickers/eth", '{ "usd": "3107.60" }', { qos: 1, retain: true });
+        await client1.publishAsync("tickers/btc/usd", "62838.80", { qos: 1, retain: true });
+        await client1.publishAsync("tickers/btc", '{ "usd": "62838.80" }', { qos: 1, retain: true });
 
         const received_msgs = [];
 
@@ -175,7 +175,7 @@ describe("publish to node 1, receive from node2", () => {
 
             const [topic, message] = await events.once(client2, 'message');
 
-            expect({topic, message: message.toString()}).toEqual(
+            expect({ topic, message: message.toString() }).toEqual(
                 {
                     topic: "tickers/eth",
                     message: '{ "usd": "3107.60" }'
