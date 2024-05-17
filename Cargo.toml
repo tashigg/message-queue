@@ -1,9 +1,5 @@
 [workspace]
-members = [".", "rumqttd-protocol", "fuzz"]
-
-[workspace.dependencies]
-# Rename our in-tree copy of `rumqttd` to prevent confusion with the published crate.
-rumqttd-protocol = { path = "rumqttd-protocol", package = "rumqttd" }
+members = [".", "rumqttd-protocol", "fuzz", "metrics"]
 
 [package]
 name = "foxmq"
@@ -11,6 +7,34 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 default-run = "foxmq"
+
+[workspace.dependencies]
+color-eyre = "0.6.2"
+dotenvy = "0.15.7"
+rand = "0.8.5"
+tokio-util = "0.7.10"
+tracing = "0.1.40"
+
+[workspace.dependencies.clap]
+version = "4.5.0"
+features = ["derive", "env"]
+
+[workspace.dependencies.futures]
+version = "0.3.30"
+features = ["std", "alloc"]
+
+# Rename our in-tree copy of `rumqttd` to prevent confusion with the published crate.
+[workspace.dependencies.rumqttd-protocol]
+path = "rumqttd-protocol"
+package = "rumqttd"
+
+[workspace.dependencies.tokio]
+version = "1.35.1"
+features = ["full"]
+
+[workspace.dependencies.tracing-subscriber]
+version = "0.3.18"
+features = ["json", "env-filter"]
 
 [dependencies.tashi-consensus-engine]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
@@ -21,40 +45,31 @@ git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
 rev = "1eee142878381bea9fb8660a509b88d571152ebc"
 
 [dependencies]
+arbitrary = { version = "1", optional = true, features = ["derive"] }
 argon2 = { version = "0.5.3", features = ["std"] }
 bytes = "1.5.0"
-color-eyre = "0.6.2"
+clap.workspace = true
+color-eyre.workspace = true
+der = { version = "0.7.8", features = ["derive"] }
 dialoguer = "0.11.0"
-dotenvy = "0.15.7"
+dotenvy.workspace = true
+futures.workspace = true
 hex = "0.4.3"
 num_enum = "0.7.2"
-rand = "0.8.5"
+rand.workspace = true
 rumqttd-protocol.workspace = true
+rustls-pemfile = "1.0.4"
 serde = { version = "1.0.196", features = ["derive", "std"] }
-thiserror = "1.0.56"
-toml = { version = "0.8.10", features = ["parse"] }
-tracing = "0.1.40"
-triomphe = "0.1.11"
-tokio-util = "0.7.10"
-der = { version = "0.7.8", features = ["derive"] }
-futures = { version = "0.3.30", features = ["std", "alloc"] }
 slotmap = "1.0.7"
-arbitrary = { version = "1", optional = true, features = ["derive"] }
+thiserror = "1.0.56"
+tokio.workspace = true
 # TODO: upgrade RusTLS in TCE and message-queue [TG-461]
 tokio-rustls = "0.24.1"
-rustls-pemfile = "1.0.4"
-
-[dependencies.clap]
-version = "4.5.0"
-features = ["derive", "env"]
-
-[dependencies.tokio]
-version = "1.35.1"
-features = ["full"]
-
-[dependencies.tracing-subscriber]
-version = "0.3.18"
-features = ["json", "env-filter"]
+tokio-util.workspace = true
+toml = { version = "0.8.10", features = ["parse"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+triomphe = "0.1.11"
 
 # Recommended by `color-eyre` to improve performance:
 # https://docs.rs/color-eyre/latest/color_eyre/#improving-perf-on-debug-builds

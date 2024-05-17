@@ -1,0 +1,30 @@
+[package]
+name = "foxmq-metrics"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+clap.workspace = true
+color-eyre.workspace = true
+dotenvy.workspace = true
+futures.workspace = true
+# Chosen because it's a well known implementation.
+paho-mqtt = "0.12.3"
+rand.workspace = true
+sysinfo = "0.30.12"
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dependencies.influxdb2]
+version = "0.5.0"
+default-features = false
+features = ["rustls"]
+
+[[bin]]
+name = "publisher"
+
+[[bin]]
+name = "subscriber"
