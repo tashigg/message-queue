@@ -348,6 +348,18 @@ fn read_u8(stream: &mut Bytes) -> Result<u8, Error> {
     Ok(stream.get_u8())
 }
 
+fn read_bool(stream: &mut Bytes) -> Result<bool, Error> {
+    if stream.is_empty() {
+        return Err(Error::MalformedPacket);
+    }
+
+    match stream.get_u8() {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(Error::MalformedPacket),
+    }
+}
+
 fn read_u32(stream: &mut Bytes) -> Result<u32, Error> {
     if stream.len() < 4 {
         return Err(Error::MalformedPacket);
