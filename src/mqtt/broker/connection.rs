@@ -420,11 +420,28 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
                 break;
             }
 
+            let expiry_interval = match mail.publish.outgoing_expiry_interval() {
+                // > In the QoS 2 delivery protocol,
+                // the sender MUST NOT apply Application Message expiry if a PUBLISH packet has been sent.
+                // [MQTT-4.3.3-7].
+                _ if mail.delivery_meta.qos() == QoS::ExactlyOnce && mail.delivery_meta.dup() => {
+                    mail.publish
+                        .properties
+                        .as_ref()
+                        .and_then(|it| it.message_expiry_interval)
+                }
+
+                None => None,
+                Some(None) => continue,
+                Some(Some(expiry_interval)) => Some(expiry_interval),
+            };
+
             self.send(publish::txn_to_packet(
                 &mail.publish,
                 mail.delivery_meta,
                 Some(mail.packet_id),
                 &mail.subscription_ids,
+                expiry_interval,
             ))
             .await?;
 
@@ -432,11 +449,19 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         }
 
         while let Some(mail) = mailbox.pop_unordered() {
+            let expiry_interval = match mail.publish.outgoing_expiry_interval() {
+                None => None,
+                // Message expired
+                Some(None) => continue,
+                Some(Some(expiry_interval)) => Some(expiry_interval),
+            };
+
             self.send(publish::txn_to_packet(
                 &mail.publish,
                 PublishMeta::new(QoS::AtMostOnce, mail.retain(), false),
                 None,
                 mail.subscription_ids(),
+                expiry_interval,
             ))
             .await?;
         }

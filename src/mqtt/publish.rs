@@ -344,6 +344,7 @@ pub fn txn_to_packet(
     delivery_meta: PublishMeta,
     packet_id: Option<PacketId>,
     sub_ids: &[SubscriptionId],
+    expiry_interval: Option<u32>,
 ) -> Packet {
     Packet::Publish(
         Publish::with_all(
@@ -365,7 +366,7 @@ pub fn txn_to_packet(
 
             PublishProperties {
                 payload_format_indicator: clone_prop!(payload_format_indicator),
-                message_expiry_interval: clone_prop!(message_expiry_interval),
+                message_expiry_interval: expiry_interval,
                 topic_alias: None,
                 response_topic: clone_prop!(response_topic),
                 correlation_data: clone_prop!(correlation_data).map(|bytes| bytes.0),

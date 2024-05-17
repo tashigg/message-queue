@@ -39,6 +39,19 @@ pub struct PublishTrasaction {
     pub properties: Option<PublishTransactionProperties>,
 }
 
+impl PublishTrasaction {
+    /// Return the expiry interval to send to *clients*.
+    ///
+    /// `None` when there's no expiry interval in the first place, and `Some(None)` if the message has expired.
+    pub fn outgoing_expiry_interval(&self) -> Option<Option<u32>> {
+        let incoming_ivl = self.properties.as_ref()?.message_expiry_interval?;
+        // todo: adjust via consensus latency.
+        let elapsed = TimestampSeconds::now().0 - self.timestamp_received.0;
+
+        Some(incoming_ivl.checked_sub(elapsed as u32))
+    }
+}
+
 /// DER mapping of [`rumqttd::protocol::PublishProperties`].
 ///
 /// `topic_alias` and `subscription_identifiers` are omitted as they are only used between
