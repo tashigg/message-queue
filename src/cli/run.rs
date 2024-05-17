@@ -269,6 +269,7 @@ fn create_tce_config(
     Ok(tashi_consensus_engine::Config::new(secret_key)
         .initial_nodes(nodes)
         .use_alpn(true)
+        .enable_hole_punching(false)
         // TODO: we can dispatch messages before they come to consensus
         // but we need to make sure we don't duplicate PUBLISHes.
         // .report_events_before_consensus(true)
