@@ -265,6 +265,12 @@ pub fn validate_and_convert(
             if response_topic.len() > MAX_STRING_LEN {
                 protocol_err!("response topic too long");
             }
+
+            validate!(
+                protocol::valid_topic(topic_str),
+                TopicNameInvalid,
+                "not a valid response topic: {topic_str:?}"
+            );
         }
 
         if let Some(content_type) = &props.content_type {
