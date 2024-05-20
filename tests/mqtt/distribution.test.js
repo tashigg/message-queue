@@ -115,40 +115,56 @@ describe("publish to node 1, receive from node2", () => {
     });
 
     test("retained messages", async () => {
-        // The timeout to wait when we want to make sure no more messages are being sent on a topic.
-        const no_message_timeout = 100;
+        /**
+         * Collect messages from `client`, waiting at most `timeoutMs` to make sure we got all that will arrive.
+         */
+        async function collectMessages(client, timeoutMs = 500) {
+            const messages = [];
+
+            const messagesIter = events.on(
+                client,
+                'message',
+                // This will cause the loop to throw an `AbortError`.
+                { signal: AbortSignal.timeout(timeoutMs) }
+            );
+
+            try {
+                for await (const [topic, message] of messagesIter) {
+                    messages.push({
+                        topic,
+                        message: message.toString()
+                    });
+                }
+            } catch (e) {
+                if (e.name !== 'AbortError') {
+                    throw e;
+                }
+            }
+
+            return messages;
+        }
 
         const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 4 });
         const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
 
         console.log('sending retained messages');
+
+        // We need to create this before we subscribe to avoid racing the subscribe call itself.
+        //
+        // This will buffer messages until awaited.
+        const messages = collectMessages(client2);
+
+        await client2.subscribeAsync("tickers/#");
+
         await client1.publishAsync("tickers/eth/usd", "3107.60", { qos: 1, retain: true });
         await client1.publishAsync("tickers/eth", '{ "usd": "3107.60" }', { qos: 1, retain: true });
         await client1.publishAsync("tickers/btc/usd", "62838.80", { qos: 1, retain: true });
         await client1.publishAsync("tickers/btc", '{ "usd": "62838.80" }', { qos: 1, retain: true });
 
-        const received_msgs = [];
-
-        await client2.subscribeAsync("tickers/#");
-
         console.log('waiting for retained messages');
 
-        // Makes sure the retained messages are sent before we test the actual retain handling
-        for await (const [topic, message] of events.on(client2, 'message')) {
-            received_msgs.push({
-                topic,
-                message: message.toString()
-            });
-
-            if (received_msgs.length === 4) {
-                break;
-            }
-        }
-
-        await client2.unsubscribeAsync("tickers/#");
-
         // Retained message handling gives messages a total order; in this case, it's based on the order they were sent.
-        expect(received_msgs).toEqual([
+        await expect(messages).resolves.toEqual([
             {
                 topic: "tickers/eth/usd",
                 message: "3107.60",
@@ -168,29 +184,22 @@ describe("publish to node 1, receive from node2", () => {
             },
         ]);
 
+        await client2.unsubscribeAsync("tickers/#");
+
         // Test retained message delivery
         {
             console.log('test retained messages: exact topic');
 
+            const messages = collectMessages(client2);
+
             await client2.subscribeAsync("tickers/eth");
 
-            const [topic, message] = await events.once(client2, 'message');
-
-            expect({ topic, message: message.toString() }).toEqual(
+            await expect(messages).resolves.toEqual([
                 {
                     topic: "tickers/eth",
                     message: '{ "usd": "3107.60" }'
                 },
-            );
-
-            // Ensure only one message is delivered.
-            const result = await Promise.race([
-                events.once(client2, 'message'),
-                // If the timeout elapses before another message is delivered, this promise will resolve to `[]`.
-                timers.setTimeout(no_message_timeout, [])
             ]);
-
-            expect(result).toEqual([]);
 
             await client2.unsubscribeAsync("tickers/eth");
         }
@@ -198,23 +207,12 @@ describe("publish to node 1, receive from node2", () => {
         {
             console.log('test retained messages: multi-level wildcard');
 
+            const messages = collectMessages(client2);
+
             // Multi-level wildcards match their parent and any children.
             await client2.subscribeAsync("tickers/btc/#");
 
-            const received_msgs = [];
-
-            for await (const [topic, message] of events.on(client2, 'message')) {
-                received_msgs.push({
-                    topic,
-                    message: message.toString()
-                });
-
-                if (received_msgs.length === 2) {
-                    break;
-                }
-            }
-
-            expect(received_msgs).toEqual([
+            await expect(messages).resolves.toEqual([
                 {
                     topic: "tickers/btc/usd",
                     message: "62838.80"
@@ -225,48 +223,19 @@ describe("publish to node 1, receive from node2", () => {
                 },
             ]);
 
-            // Ensure no more messages are delivered.
-            const result = await Promise.race([
-                events.once(client2, 'message'),
-                // If the timeout elapses before another message is delivered, this promise will resolve to `[]`.
-                timers.setTimeout(no_message_timeout, [])
-            ]);
-
-            expect(result).toEqual([]);
-
             await client2.unsubscribeAsync("tickers/btc/#");
         }
 
         {
             console.log('test retained messages: single-level wildcard');
 
+            const messages = collectMessages(client2);
+
             // Since this is a single-level wildcard, we should only expect 2 messages.
             await client2.subscribeAsync("tickers/+");
 
-            const received_msgs = [];
-
-            for await (const [topic, message] of events.on(client2, 'message')) {
-                received_msgs.push({
-                    topic,
-                    message: message.toString()
-                });
-
-                if (received_msgs.length === 2) {
-                    break;
-                }
-            }
-
-            // Ensure only one message is delivered.
-            const result = await Promise.race([
-                events.once(client2, 'message'),
-                // If the timeout elapses before another message is delivered, this promise will resolve to `[]`.
-                timers.setTimeout(no_message_timeout, [])
-            ]);
-
-            expect(result).toEqual([]);
-
             // This is the order the messages were sent.
-            expect(received_msgs).toEqual([
+            await expect(messages).resolves.toEqual([
                 {
                     topic: "tickers/eth",
                     message: '{ "usd": "3107.60" }'
@@ -279,6 +248,8 @@ describe("publish to node 1, receive from node2", () => {
 
             await client2.unsubscribeAsync("tickers/+");
         }
+
+        console.log("closing clients");
 
         await client1.endAsync();
         await client2.endAsync();
