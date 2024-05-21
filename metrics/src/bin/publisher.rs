@@ -26,7 +26,7 @@ struct Args {
     /// The index of which publisher instance this is.
     ///
     /// Used when writing data to InfluxDB and in the MQTT client ID.
-    #[clap(long)]
+    #[clap(long, env = "PUBLISHER_INDEX")]
     index: u32,
 
     /// The number of connections to open.
@@ -54,7 +54,7 @@ struct Args {
     ramp_period: f64,
 
     /// The period at which to submit measurements to InfluxDB, in seconds.
-    #[clap(long, env = "PUBLISHER_SAMPLE_RATE")]
+    #[clap(long, env = "PUBLISHER_SAMPLE_PERIOD")]
     sample_period: f64,
 
     /// The length of topics to generate, in ASCII characters.
@@ -97,6 +97,7 @@ struct Context {
 
 struct ConnectionMeasurements {
     messages_sent: u32,
+    bytes_sent: i64,
     rate: f64,
 }
 
@@ -244,6 +245,7 @@ async fn connection_task(context: Arc<Context>, index: u32) -> eyre::Result<()> 
     let mut sample_interval = time::interval(Duration::from_secs_f64(context.args.sample_period));
 
     let mut messages_sent = 0;
+    let mut bytes_sent = 0;
 
     loop {
         let sample_tick: OptionFuture<_> = context
@@ -261,6 +263,8 @@ async fn connection_task(context: Arc<Context>, index: u32) -> eyre::Result<()> 
                     .await
                     .wrap_err("error publishing message to broker")?;
 
+                bytes_sent += context.args.message_size as i64;
+
                 messages_sent += 1;
             },
             Some(influxdb) = sample_tick => {
@@ -270,6 +274,7 @@ async fn connection_task(context: Arc<Context>, index: u32) -> eyre::Result<()> 
                     index,
                     ConnectionMeasurements {
                         messages_sent,
+                        bytes_sent,
                         rate
                     }
                 )
@@ -278,6 +283,7 @@ async fn connection_task(context: Arc<Context>, index: u32) -> eyre::Result<()> 
 
                 // Reset for the next sample.
                 messages_sent = 0;
+                bytes_sent = 0;
             }
             _ = context.token.cancelled() => {
                 break;
