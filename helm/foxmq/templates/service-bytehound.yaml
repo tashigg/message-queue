@@ -1,0 +1,18 @@
+{{- if .Values.worker.bytehound.enable -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "foxmq.fullname" . }}-bytehound
+  labels:
+    {{- include "foxmq.labels" . | nindent 4 }}
+spec:
+  type: {{default "NodePort" .Values.influxDB.service.type }}
+  ports:
+    - port: 8080
+      # Using `caddy` as the reverse proxy for bytehound to add HTTP authentication
+      targetPort: caddy
+      protocol: TCP
+      name: caddy
+  selector:
+    {{- include "foxmq.selectorLabels" . | nindent 4 }}
+  {{- end -}}

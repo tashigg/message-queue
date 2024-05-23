@@ -1,0 +1,122 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "foxmq-metrics.publisher.jobName" . }}
+  labels:
+    {{- include "foxmq-metrics.labels" . | nindent 4 }}
+spec:
+  parallelism: {{ .Values.nodeCount }}
+  completions: {{ .Values.nodeCount }}
+  completionMode: Indexed
+  {{- with .Values.publisher.jobTtlSeconds }}
+  ttlSecondsAfterFinished: {{ . }}
+  {{- end }}
+  suspend: True
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "foxmq-metrics.selectorLabels" . | nindent 8 }}
+        tashi-job: worker
+    spec:
+      restartPolicy: Never
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "foxmq-metrics.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}-worker
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.worker.image }}"
+          imagePullPolicy: Always
+          command: ["/bin/sh"]
+          args:
+            - "-c"
+            # $JOB_COMPLETION_INDEX` is bound too late to be referenced in Kubernetes' variable expansion,
+            # so we need to have the shell do it.
+            # https://github.com/kubernetes/kubernetes/issues/121523
+            - >
+              {{- if .Values.worker.bytehound.enable }}
+              LD_PRELOAD=./libbytehound.so
+              MEMORY_PROFILER_OUTPUT="/mnt/bytehound/tce-node-$(JOB_COMPLETION_INDEX).dat"
+              {{- end }}
+              /home/tashi-consensus-engine/target/release/foxmq-metrics
+              --node-id=$JOB_COMPLETION_INDEX
+          resources:
+            {{- toYaml .Values.worker.resources | nindent 12 }}
+          env:
+            - name: TP_NODES
+              value: "{{ .Values.nodeCount }}"
+            # It can take time for all workers to be scheduled
+            - name: TP_DISCOVERY_DURATION_SECS
+              value: "{{ .Values.worker.discoveryDurationSecs }}"
+            - name: TP_STARTING_TPS
+              value: "{{ .Values.worker.startingTps}}"
+            - name: TP_RAMP_FACTOR
+              value: "{{ .Values.worker.rampFactor }}"
+            - name: TP_RAMP_PERIOD_MILLIS
+              value: "{{ .Values.worker.rampPeriodMillis }}"
+            - name: TP_BASE_MIN_EVENT_INTERVAL_MICROS
+              value: "{{ .Values.worker.baseEventIntervalMicros }}"
+            - name: TP_MAX_CONSENSUS_LATENCY_MILLIS
+              value: "{{ .Values.worker.maxConsensusLatencyMillis }}"
+            - name: TP_TRANSACTION_SIZE_BYTES
+              value: "{{ .Values.worker.transactionSizeBytes }}"
+            - name: REDIS_URL
+              value: redis://{{ include "foxmq-metrics.fullname" . }}-redis:6379
+            - name: INFLUXDB_URL
+              value: http://{{ include "foxmq-metrics.fullname" . }}-influxdb:8086/{{ .Values.influxDB.bucket }}
+            - name: INFLUXDB_ORG
+              value: {{ .Values.influxDB.org }}
+            - name: INFLUXDB_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "foxmq-metrics.fullname" . }}
+                  key: authToken
+            - name: RUST_BACKTRACE
+              value: "{{ .Values.worker.backtrace }}"
+            - name: RUST_LOG
+              value: {{ default "" .Values.worker.logFilter }}
+          volumeMounts:
+            {{- if .Values.worker.bytehound.enable }}
+            - mountPath: /mnt/bytehound
+              name: bytehound
+            {{- end }}
+
+        {{- with .Values.worker.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.worker.exclusiveScheduling }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  tashi-job: worker
+        {{- end }}
+      tolerations:
+        - key: perf
+          operator: Equal
+          value: "True"
+        {{- with .Values.tolerations }}
+        {{- toYaml . | nindent 12 }}
+        {{- end }}
+      volumes:
+        {{- if .Values.worker.bytehound.enable }}
+        - name: bytehound
+          persistentVolumeClaim:
+            claimName: {{ include "foxmq-metrics.fullname" . }}-bytehound
+        {{- end }}

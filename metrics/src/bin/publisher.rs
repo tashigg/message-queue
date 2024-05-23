@@ -63,7 +63,7 @@ struct Args {
     #[clap(long, env = "PUBLISHER_TOPIC_LENGTH")]
     topic_length: u16,
 
-    /// The size of messages to generate, in bytes. Max size: 65 KiB.
+    /// The size of messages to generate, in bytes. Max size: 64 KiB.
     #[clap(long, env = "PUBLISHER_MESSAGE_SIZE")]
     message_size: u16,
 

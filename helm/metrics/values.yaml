@@ -1,0 +1,351 @@
+# Default values for foxmq-metrics.
+
+# The total duration to run the test for.
+duration: 600
+
+# Configuration for the FoxMQ broker deployment.
+foxMQ:
+  # The container image to use for the brokers.
+  #
+  # The deployment will invoke the default entrypoint as the `foxmq` binary.
+  image: "ghcr.io/tashigg/foxmq:v0.1.0"
+
+  # The number of replicas for the broker cluster.
+  replicas: 3
+
+  # Clear this key to allow broker pods to be scheduled to the same Kubernetes node.
+  #
+  # When set, this assigns broker pods an anti-affinity for each other, preventing them from being scheduled to
+  # the same node.
+  exclusiveScheduling: True
+
+  # Any resource requests or limits to apply to the broker pods.
+  #
+  # Can be used instead of `exclusiveScheduling` to ensure an even distribution of compute resources
+  # if Kubernetes nodes are oversized for just one pod.
+  resources:
+    requests:
+      cpu: "1500m"
+
+  # Set to `enable` to `true` to use `LD_PRELOAD` to inject `libbytehound.so` to collect memory profiling data.
+  #
+  # A service will be allocated that hosts allocation data behind a REST API. The API is guarded with HTTP Basic Auth,
+  # which uses the same credentials as InfluxDB for convenience.
+  #
+  # This may cause a significant hit to performance.
+  bytehound:
+    enable: false
+
+    # Which node to view memory profiling data for. Only one node's profiling data is loaded at a time.
+    viewNode: 0
+
+    resources:
+      requests:
+        memory: "12Gi"
+
+# Configuration for the publishers job.
+publisher:
+  # The container image to use for publishers.
+  #
+  # The job will look for the binary at `/home/foxmq-metrics/publisher`.
+  image: "ghcr.io/tashigg/foxmq-metrics:v0.1.0"
+
+  # The number of publishers to spin up.
+  count: 100
+
+  # The total number of connections per publisher to open.
+  connections: 100
+
+  # The number of connections to open per second until `connections` total are open, per publisher.
+  connectionRate: 10
+
+  # The length of topics to generate, in ASCII characters.
+  #
+  # Note that FoxMQ currently enforces a maximum topic length of 1024 characters.
+  topicLength: 16
+
+  # The size of messages to generate, in bytes. Max: 64 KiB.
+  messageSize: 16
+
+  # The Quality of Service (QoS) level to publish messages at.
+  #
+  # Valid values: 0, 1, 2
+  #
+  # 0: At Most Once delivery, messages may be dropped.
+  # 1: At Least Once delivery, messages may not be dropped but may be duplicated.
+  # 2: Exactly Once delivery, messages may not be dropped nor duplicated.
+  publishQoS: 1
+
+  # The initial rate to publish messages, in messages per second per connection.
+  initialRate: 0.01
+
+  # The maximum rate to publish messages, in messages per second per connection.
+  maxRate: 10
+
+  # The factor to multiply the current message rate by each `rampPeriod`.
+  rampFactor: 1.5
+
+  # The period, in seconds, between ramp-ups.
+  rampPeriod: 30
+
+  # The period, in seconds, at which to send samples to InfluxDB.
+  samplePeriod: &samplePeriod 1
+
+  # The time, in seconds, after finishing to automatically clean up publisher job pods.
+  #
+  # Subscriber pods remain for this duration to allow inspecting their completion status and logs.
+  #
+  # If not set, publisher pods will remain unless removed, either manually or by uninstalling this Helm chart.
+  #
+  # The Kubernetes cluster autoscaler will not scale back nodes until completed pods are removed,
+  # so this helps avoid large compute costs if you forget to uninstall this Helm chart when finished.
+  jobTtlSeconds: 600
+
+
+# Configuration for the subscribers job.
+subscriber:
+  # The container image to user for publishers.
+  #
+  # The job will look for the binary at `/home/foxmq-metrics/subscriber`.
+  image: "ghcr.io/tashigg/foxmq-metrics:v0.1.0"
+
+  # The number of subscribers to spin up.
+  count: 100
+
+  # The total number of connections per subscriber to open.
+  connections: 10000
+
+  # The number of connections to open per second until `connections` total are open.
+  connectionRate: 100
+
+  # The topic filter that each connection should subscribe with.
+  topicFilter: "#"
+
+  # The period, in seconds, at which to send samples to InfluxDB.
+  samplePeriod: *samplePeriod
+
+  # The time, in seconds, after finishing to automatically clean up subscriber job pods.
+  #
+  # Subscriber pods remain for this duration to allow inspecting their completion status and logs.
+  #
+  # If not set, subscriber pods will remain unless removed, either manually or by uninstalling this Helm chart.
+  #
+  # The Kubernetes cluster autoscaler will not scale back nodes until completed pods are removed,
+  # so this helps avoid large compute costs if you forget to uninstall this Helm chart when finished.
+  jobTtlSeconds: 600
+
+
+# The number of FoxMQ nodes to spin up. This corresponds to the number of replicas of `worker` pods that will be created.
+#
+# Note that if `worker.exclusiveScheduling: True` then the cluster must be able to accommodate
+# one worker pod per K8s node.
+nodeCount: 26
+
+# Configuration for the worker job. This will spin up TCE node pods for the stress test.
+worker:
+  # The image to use for executing the benchmark.
+  #
+  # This image must have a shell for env var expansion and the `foxmq-metrics` binary under `target/release/`.
+  #
+  # The image is assumed to be built from `metrics/Dockerfile`.
+  image: &worker-image "ghcr.io/tashigg/tce-metrics:parallel-verify-4"
+
+  # The number of *submitted* transactions per second for each worker to begin the stress test with.
+  #
+  # The overall transactions per second of the network will be this times `nodeCount`.
+  startingTps: 6000
+
+  # The size of each transaction to submit.
+  transactionSizeBytes: 128
+
+  # The number to multiply `startingTps` by every ramp period, to increase the stress on the network.
+  rampFactor: 1.5
+
+  # The period, in milliseconds, to apply `rampFactor` to the current submit TPS.
+  #
+  # This should be long enough to allow the dynamic event interval to adapt to the new load before ramping again.
+  rampPeriodMillis: 30000
+
+  # The base event creation interval which is used to control the amount of work TCE does to bring transactions
+  # to consensus. A lower interval will produce a lower average consensus latency at the cost of more CPU usage.
+  baseEventIntervalMicros: 5000
+
+  # The cutoff threshold, in milliseconds of average consensus latency, for the stress test.
+  #
+  # If the average consensus latency exceeds this value for more than ten seconds, the stress test will end.
+  maxConsensusLatencyMillis: 10000
+
+  # The timeout that the worker pods will wait for all `nodeCount` pods to come online.
+  #
+  # If using exclusive scheduling with an autoscaling Kubernetes cluster, this must be set long enough to allow
+  # time for the cluster to scale up so all worker pods can be scheduled.
+  discoveryDurationSecs: 600
+
+  # Clear this key to allow worker pods to be scheduled to the same Kubernetes node.
+  #
+  # When set, this assigns worker pods an anti-affinity for each other, preventing them from being scheduled to
+  # the same node.
+  exclusiveScheduling: True
+
+  # The Kubernetes node selector for the worker pods.
+  #
+  # If multiple types of nodes are available, this should be set to select the node type configured for performance.
+  #
+  # Worker pods also by default have a toleration for the `perf: "True"; NoSchedule` taint, so you can use such a taint
+  # to ensure that only worker pods are scheduled to high-performance nodes to avoid any interference with the
+  # stress test.
+  nodeSelector:
+    # As written, this will only select nodes with the label `perf: "True"`.
+    perf: "True"
+
+  # The time, in seconds, after finishing to automatically clean up worker job pods.
+  #
+  # Worker pods remain for this duration to allow inspecting their completion status and logs.
+  #
+  # If not set, worker pods will remain unless removed, either manually or by uninstalling this Helm chart.
+  #
+  # The Kubernetes cluster autoscaler will not scale back nodes until completed pods are removed,
+  # so this helps avoid large compute costs if you forget to uninstall this Helm chart when finished.
+  jobTtlSeconds: 600
+
+  # Any resource requests or limits to apply to the worker pods.
+  #
+  # Can be used instead of `exclusiveScheduling` to ensure an even distribution of compute resources
+  # if Kubernetes nodes are oversized for just one pod.
+  resources:
+    requests:
+      cpu: "1500m"
+
+  # The value of the `RUST_BACKTRACE` environment variable to execute the foxmq-metrics binary with.
+  backtrace: "1"
+
+  # The value of the `RUST_LOG` environment variable to execute the foxmq-metrics binary with.
+  logFilter: "warn,metrics=info,stress_test=info,tashi_consensus_engine::sync::quic::graph_sitter=info"
+
+  # Set to `true` to use `LD_PRELOAD` to inject `libbytehound.so` to collect memory profiling data.
+  #
+  # A service will be allocated that hosts allocation data behind a REST API. The API is guarded with HTTP Basic Auth,
+  # which uses the same credentials as InfluxDB for convenience.
+  #
+  # This may cause a significant hit to performance.
+  bytehound:
+    enable: false
+
+    # Which node to view memory profiling data for. Only one node's profiling data is loaded at a time.
+    viewNode: 0
+
+    resources:
+      requests:
+        memory: "12Gi"
+
+# Configuration for the runner job, which ensures that the Redis and InfluxDB services are spun up and available
+# before starting the worker job.
+runner:
+  # The image to use for the runner job. Currently, this only needs `kubectl` and a Bash shell.
+  #
+  # It doesn't have to be the same as the worker image, but there's no trustworthy image on any known public registry
+  # that has both `kubectl` and a shell, and it's one less image to download.
+  image: *worker-image
+
+# Configuration for the InfluxDB pod, which running worker pods will periodically report metrics to.
+#
+# The InfluxDB dashboard is exposed as a service for inspection of the metrics, and generated credentials
+# for the dashboard are stored in a Kubernetes secret with the same name as the installed chart (called the "release").
+influxDB:
+  # The image to use. It should support the InfluxDB v2 API.
+  image: influxdb:2.7
+  # The organization to create the credentials under in InfluxDB.
+  org: tashigg
+  # The name of the bucket to submit metrics to.
+  bucket: foxmq-metrics
+
+  # Set to a non-empty string to override the password for the dashboard credentials.
+  #
+  # By default, the password is a randomly generated string which can be found in a Kubernetes secret
+  # created with the same name as the installed chart.
+  password: ""
+
+  # Configure the Service that exposes the InfluxDB dashboard.
+  service:
+    # The service type, which should be "NodePort" or "LoadBalancer" to be able to access the dashboard outside the cluster.
+    #
+    # Run `kubectl get service` to find the IP of the service.
+    #
+    # Azure requires this to be "LoadBalancer" to allocate a public IP for the service.
+    #
+    # Beware when uninstalling and reinstalling the Helm chart in quick succession as it seems that the service
+    # may fail to create if Azure is asked to quickly deallocate and reallocate a load balancer with the same name.
+    type: LoadBalancer
+
+    # If the `type` of the service is set to "NodePort", the opened port number will be arbitrarily chosen
+    # in a port range configured on the node (default 30000 - 32767).
+    #
+    # Set this key to use the same port every time.
+    #
+    # Note that the chart installation may fail if the port is already in use.
+    # nodePort: 30256
+
+  resources:
+    requests:
+      memory: "8Gi"
+
+# Secrets (which must already exist in the cluster and are not managed by this chart) which are used
+# for pulling any previously specified image.
+imagePullSecrets:
+  # Pull secret manually added to the `cluster-tashi-perf` cluster in Azure to pull from the GitHub Container Registry
+  # at `github.com/tashigg`.
+  #
+  # Annoyingly, GHCR only supports personal access tokens (classic) so this token is tied to my (abonander's) account.
+  # It may or may not have expired by the next time this chart is used.
+  - name: ghcr
+
+# BELOW THIS LINE ARE KEYS THAT WERE AUTOMATICALLY GENERATED BY `helm create` AND I COULDN'T BE ARSED TO REMOVE.
+# THEY MAY OR MAY NOT DO ANYTHING. MODIFY OR REMOVE THEM AT YOUR OWN RISK.
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: { }
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: { }
+
+podSecurityContext: { }
+# fsGroup: 2000
+
+securityContext: { }
+# capabilities:
+#   drop:
+#   - ALL
+# readOnlyRootFilesystem: true
+# runAsNonRoot: true
+# runAsUser: 1000
+
+resources: { }
+# We usually recommend not to specify default resources and to leave this as a conscious
+# choice for the user. This also increases chances charts run on environments with little
+# resources, such as Minikube. If you do want to specify resources, uncomment the following
+# lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+# limits:
+#   cpu: 100m
+#   memory: 128Mi
+# requests:
+#   cpu: 100m
+#   memory: 128Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+nodeSelector: { }
+
+tolerations: [ ]

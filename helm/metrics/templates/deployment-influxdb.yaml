@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "foxmq-metrics.fullname" . }}-influxdb
+  labels:
+    {{- include "foxmq-metrics.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "foxmq-metrics.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "foxmq-metrics.selectorLabels" . | nindent 8 }}
+        tashi-app: {{ include "foxmq-metrics.fullname" . }}-services
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "foxmq-metrics.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: influxdb
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.influxDB.image }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: influxdb
+              containerPort: 8086
+              protocol: TCP
+          livenessProbe:
+            initialDelaySeconds: 5
+            httpGet:
+              path: /
+              port: influxdb
+          readinessProbe:
+            initialDelaySeconds: 5
+            httpGet:
+              path: /
+              port: influxdb
+          resources:
+            {{- toYaml .Values.influxDB.resources | nindent 12 }}
+          env:
+            - name: DOCKER_INFLUXDB_INIT_MODE
+              value: setup
+            - name: DOCKER_INFLUXDB_INIT_ORG
+              value: "{{ .Values.influxDB.org }}"
+            - name: DOCKER_INFLUXDB_INIT_BUCKET
+              value: "{{ .Values.influxDB.bucket }}"
+            - name: DOCKER_INFLUXDB_INIT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "foxmq-metrics.fullname" . }}
+                  key: username
+            - name: DOCKER_INFLUXDB_INIT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "foxmq-metrics.fullname" . }}
+                  key: password
+            - name: DOCKER_INFLUXDB_INIT_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "foxmq-metrics.fullname" . }}
+                  key: authToken
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

@@ -1,0 +1,16 @@
+{{- if .Values.worker.bytehound.enable -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  annotations:
+    pv.kubernetes.io/provisioned-by: file.csi.azure.com
+  name: {{ include "foxmq.fullname" . }}-bytehound
+spec:
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  storageClassName: azurefile-csi
+  resources:
+    requests:
+      storage: 100Gi
+  {{- end -}}

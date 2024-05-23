@@ -32,6 +32,7 @@ struct Args {
     #[clap(long, default_value = "1", env = "SUBSCRIBER_CONNECTION_RATE")]
     connection_rate: f64,
 
+    /// The topic filter that each connection should subscribe with.
     #[clap(long, default_value = "#", env = "SUBSCRIBER_TOPIC_FILTER")]
     topic_filter: String,
 

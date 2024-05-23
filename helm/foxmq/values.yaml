@@ -1,0 +1,78 @@
+# Default values for foxmq.
+
+# The container image to use for the brokers.
+#
+# The deployment will invoke the default entrypoint as the `foxmq` binary.
+image: "ghcr.io/tashigg/foxmq:v0.1.0"
+
+# The number of replicas for the broker cluster.
+replicas: 3
+
+# Clear this key to allow broker pods to be scheduled to the same Kubernetes node.
+#
+# When set, this assigns broker pods an anti-affinity for each other, preventing them from being scheduled to
+# the same node.
+exclusiveScheduling: True
+
+# Any resource requests or limits to apply to the broker pods.
+#
+# Can be used instead of `exclusiveScheduling` to ensure an even distribution of compute resources
+# if Kubernetes nodes are oversized for just one pod.
+resources:
+  requests:
+    cpu: "1500m"
+
+# Configure the Service that exposes the FoxMQ brokers.
+service:
+  # The service type, which should be "NodePort" or "LoadBalancer" to be able to access the dashboard outside the cluster.
+  #
+  # Run `kubectl get service` to find the IP of the service.
+  #
+  # Azure requires this to be "LoadBalancer" to allocate a public IP for the service.
+  #
+  # Beware when uninstalling and reinstalling the Helm chart in quick succession as it seems that the service
+  # may fail to create if Azure is asked to quickly deallocate and reallocate a load balancer with the same name.
+  type: NodePort
+
+  # If the `type` of the service is set to "NodePort", the opened port number will be arbitrarily chosen
+  # in a port range configured on the node (default 30000 - 32767).
+  #
+  # Set this key to use the same port every time.
+  #
+  # Note that the chart installation may fail if the port is already in use.
+  # nodePort: 30256
+
+# Use Bytehound (https://github.com/koute/bytehound) to collect memory profiling data.
+#
+# When enabled, this uses `LD_PRELOAD` to inject the Bytehound allocation routines into the FoxMQ process.
+# This may cause a significant hit to performance.
+#
+# Additionally, another deployment will be added which hosts the profiling data behind a web interface.
+# The API is guarded with HTTP Basic Auth, which uses the same credentials as InfluxDB for convenience.
+bytehound:
+  # Enable memory profiling with Bytehound.
+  enable: false
+
+  # Which node to view memory profiling data for. Only one node's profiling data is loaded at a time.
+  viewNode: 0
+
+  login:
+    username: foxmq
+    # password:
+
+  # The resource requests/limits for the Bytehound web interface deployment.
+  #
+  # Note that a significant amount of memory is required to hold the profiling data.
+  resources:
+    requests:
+      memory: "12Gi"
+
+# Secrets (which must already exist in the cluster and are not managed by this chart) which are used
+# for pulling any previously specified image.
+imagePullSecrets:
+  # Pull secret manually added to the `cluster-tashi-perf` cluster in Azure to pull from the GitHub Container Registry
+  # at `github.com/tashigg`.
+  #
+  # Annoyingly, GHCR only supports personal access tokens (classic) so this token is tied to my (abonander's) account.
+  # It may or may not have expired by the next time this chart is used.
+  - name: ghcr

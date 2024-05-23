@@ -1,0 +1,151 @@
+{{- if .Values.worker.bytehound.enable -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{include "foxmq.fullname" .}}-bytehound
+  labels:
+    {{- include "foxmq.labels" . | nindent 4 }}
+spec:
+  # The runner job will start this deployment when the worker pods finish.
+  paused: true
+  selector:
+    matchLabels:
+      {{- include "foxmq.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "foxmq.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{include "foxmq.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: bytehound
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.worker.image }}"
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            # language=bash
+            - |
+              set -ex
+
+              ls -l /mnt/bytehound
+
+              ./bytehound server \
+                -i 0.0.0.0 \
+                /mnt/bytehound/tce-node-{{ default "0" .Values.worker.bytehound.viewNode }}.dat
+          ports:
+            - name: bytehound
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            initialDelaySeconds: 30
+            failureThreshold: 60
+            httpGet:
+              path: /
+              port: bytehound
+          readinessProbe:
+            initialDelaySeconds: 30
+            httpGet:
+              path: /
+              port: bytehound
+          resources:
+            {{- toYaml .Values.worker.bytehound.resources | nindent 12 }}
+          volumeMounts:
+            - mountPath: /mnt/bytehound
+              name: bytehound
+
+        # Reverse-proxies the `bytehound server` endpoint to add HTTP Basic Auth so at least it's not wide open
+        - name: caddy
+          image: "{{ .Values.worker.image }}"
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            # language=bash
+            - |
+              set -ex
+
+              # Caddy requires the password to be hashed
+              HTTP_PASSWORD_HASH=$(./caddy hash-password -p "$HTTP_PASSWORD")
+
+              # Heredoc ftw
+              cat > Caddyfile << EOM
+              :8081
+
+              handle /healthz {
+                respond 200
+              }
+
+              handle {
+                basicauth {
+                  $HTTP_USERNAME $HTTP_PASSWORD_HASH
+                }
+
+                reverse_proxy {
+                  to :8080
+                }
+              }
+
+              EOM
+
+              ./caddy run
+
+          env:
+            - name: HTTP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "foxmq.fullname" . }}
+                  key: username
+            - name: HTTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "foxmq.fullname" . }}
+                  key: password
+          ports:
+            - containerPort: 8081
+              name: caddy
+              protocol: TCP
+          livenessProbe:
+            initialDelaySeconds: 5
+            httpGet:
+              path: /healthz
+              port: caddy
+          readinessProbe:
+            initialDelaySeconds: 5
+            httpGet:
+              path: /healthz
+              port: caddy
+
+      volumes:
+        - name: bytehound
+          persistentVolumeClaim:
+            claimName: {{ include "foxmq.fullname" . }}-bytehound
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end}}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end}}
+      tolerations:
+        - key: perf
+          operator: Equal
+          value: "True"
+        {{- with .Values.tolerations }}
+        {{- toYaml . | nindent 12 }}
+        {{- end}}
+  {{- end -}}

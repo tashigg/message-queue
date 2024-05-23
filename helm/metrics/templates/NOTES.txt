@@ -1,0 +1,15 @@
+InfluxDB:
+
+URL: http://{node IP}:{{ .Values.influxDB.service.nodePort }}
+
+Username: {{ include "foxmq-metrics.influxDB.username" . }}
+Password: {{ default "(randomly generated)" .Values.influxDB.password }}
+AuthToken: (randomly generated)
+
+
+You can retrieve the randomly generated {{- if not .Values.influxDB.password }} password and {{- end }} auth token from the generated secret as follows:
+
+{{ if not .Values.influxDB.password -}}
+kubectl get secret {{- if ne .Release.Namespace "default" }} -n {{ .Release.Namespace }} {{- end }} {{ include "foxmq-metrics.fullname" . }} -o json | jq -r .data.password | base64 --decode
+{{ end -}}
+kubectl get secret {{- if ne .Release.Namespace "default" }} -n {{ .Release.Namespace }} {{- end }} {{ include "foxmq-metrics.fullname" . }} -o json | jq -r .data.authToken | base64 --decode

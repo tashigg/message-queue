@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "foxmq-metrics.fullname" . }}-influxdb
+  labels:
+    {{- include "foxmq-metrics.labels" . | nindent 4 }}
+spec:
+  type: {{ default "NodePort" .Values.influxDB.service.type }}
+  ports:
+    - port: 8086
+      targetPort: influxdb
+      protocol: TCP
+      name: influxdb
+      {{ if .Values.influxDB.service.nodePort }}
+      nodePort: {{ .Values.influxDB.service.nodePort }}
+      {{ end }}
+  selector:
+    {{- include "foxmq-metrics.selectorLabels" . | nindent 4 }}
