@@ -14,7 +14,12 @@ use crate::config::users::{AuthConfig, User, UsersConfig};
 const DEFAULT_PASSWORD_LEN: usize = 12;
 
 // NOTE: password generation will break if multibyte characters are added!
-const PASSWORD_CHARS: &str = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%-+";
+// Includes all special characters from OWASP
+const PASSWORD_CHARS: &str = "\
+    0123456789\
+    abcdefghijklmnopqrstuvwxyz\
+    ABCDEFGHIJKLMNOPQRSTUVWXYZ\
+    !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 
 const DEFAULT_OUTPUT_FILE: &str = "foxmq.d/users.toml";
 

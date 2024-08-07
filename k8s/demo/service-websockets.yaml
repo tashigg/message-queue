@@ -1,0 +1,68 @@
+# Create a separate service for each replica so we can address them by hostname in the Ingress.
+apiVersion: v1
+kind: Service
+metadata:
+  name: foxmq-demo-0-websockets
+  annotations:
+    cloud.google.com/backend-config: '{"ports": {"8080":"foxmq-demo"}}'
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: NodePort
+  selector:
+    statefulset.kubernetes.io/pod-name: foxmq-demo-0
+  ports:
+    - name: websockets
+      protocol: TCP
+      port: 8080
+      targetPort: websockets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: foxmq-demo-1-websockets
+  annotations:
+    cloud.google.com/backend-config: '{"ports": {"8080":"foxmq-demo"}}'
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: NodePort
+  selector:
+    statefulset.kubernetes.io/pod-name: foxmq-demo-1
+  ports:
+    - name: websockets
+      protocol: TCP
+      port: 8080
+      targetPort: websockets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: foxmq-demo-2-websockets
+  annotations:
+    cloud.google.com/backend-config: '{"ports": {"8080":"foxmq-demo"}}'
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: NodePort
+  selector:
+    statefulset.kubernetes.io/pod-name: foxmq-demo-2
+  ports:
+    - name: websockets
+      protocol: TCP
+      port: 8080
+      targetPort: websockets
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: foxmq-demo-3-websockets
+  annotations:
+    cloud.google.com/backend-config: '{"ports": {"8080":"foxmq-demo"}}'
+    cloud.google.com/neg: '{"ingress": true}'
+spec:
+  type: NodePort
+  selector:
+    statefulset.kubernetes.io/pod-name: foxmq-demo-3
+  ports:
+    - name: websockets
+      protocol: TCP
+      port: 8080
+      targetPort: websockets

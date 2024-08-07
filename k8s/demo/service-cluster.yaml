@@ -1,0 +1,48 @@
+# Create a separate service for each replica so they can discover each other.
+apiVersion: v1
+kind: Service
+metadata:
+  name: foxmq-demo-0-cluster
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: foxmq-demo-0
+  ports:
+    - protocol: UDP
+      port: 19793
+      targetPort: cluster
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: foxmq-demo-1-cluster
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: foxmq-demo-1
+  ports:
+    - protocol: UDP
+      port: 19793
+      targetPort: cluster
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: foxmq-demo-2-cluster
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: foxmq-demo-2
+  ports:
+    - protocol: UDP
+      port: 19793
+      targetPort: cluster
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: foxmq-demo-3-cluster
+spec:
+  selector:
+    statefulset.kubernetes.io/pod-name: foxmq-demo-3
+  ports:
+    - protocol: UDP
+      port: 19793
+      targetPort: cluster

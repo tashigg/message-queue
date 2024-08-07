@@ -1,0 +1,54 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: foxmq-demo
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: foxmq-demo
+    networking.gke.io/managed-certificates: foxmq-demo
+    kubernetes.io/ingress.class: "gce"
+
+    # Disable insecure connections
+    # Note: this can only be added _after_ the load balancer is created which is why it's commented out by default.
+    # kubernetes.io/ingress.allow-http: "false"
+spec:
+  rules:
+    - host: node-0.demo.foxmq.infra.tashi.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: foxmq-demo-0-websockets
+                port:
+                  name: websockets
+    - host: node-1.demo.foxmq.infra.tashi.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: foxmq-demo-1-websockets
+                port:
+                  name: websockets
+    - host: node-2.demo.foxmq.infra.tashi.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: foxmq-demo-2-websockets
+                port:
+                  name: websockets
+    - host: node-3.demo.foxmq.infra.tashi.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: foxmq-demo-3-websockets
+                port:
+                  name: websockets
