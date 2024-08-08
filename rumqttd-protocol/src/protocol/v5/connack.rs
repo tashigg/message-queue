@@ -40,9 +40,11 @@ pub fn read(
 pub fn write(
     connack: &ConnAck,
     properties: &Option<ConnAckProperties>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
     let len = len(connack, properties);
+    reserve_buffer(buffer, len);
+
     buffer.put_u8(0x20);
 
     let count = write_remaining_length(buffer, len)?;
@@ -272,7 +274,7 @@ mod properties {
         Ok(Some(properties))
     }
 
-    pub fn write(properties: &ConnAckProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &ConnAckProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let len = len(properties);
         write_remaining_length(buffer, len)?;
 

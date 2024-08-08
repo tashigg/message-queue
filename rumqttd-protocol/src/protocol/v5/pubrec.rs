@@ -62,9 +62,11 @@ pub fn read(
 pub fn write(
     pubrec: &PubRec,
     properties: &Option<PubRecProperties>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
     let len = len(pubrec, properties);
+    reserve_buffer(buffer, len);
+
     buffer.put_u8(0x50);
     let count = write_remaining_length(buffer, len)?;
     buffer.put_u16(pubrec.pkid);
@@ -140,7 +142,7 @@ mod properties {
         }))
     }
 
-    pub fn write(properties: &PubRecProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &PubRecProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let len = len(properties);
         write_remaining_length(buffer, len)?;
 

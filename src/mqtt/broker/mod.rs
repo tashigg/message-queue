@@ -7,7 +7,6 @@ use color_eyre::eyre::{self, Context};
 use der::Encode;
 use futures::future::OptionFuture;
 use rand::RngCore;
-use rumqttd_protocol::QoS;
 use slotmap::SlotMap;
 use tashi_collections::{hash_map, HashMap};
 use tashi_consensus_engine::{MessageStream, Platform, TxnPermit, TxnTryReserveError};
@@ -18,18 +17,26 @@ use tokio_rustls::rustls::{Certificate, PrivateKey};
 use tokio_util::sync::CancellationToken;
 
 use connection::Connection;
+use rumqttd_protocol::QoS;
 
+use crate::cli::run::WsConfig;
 use crate::config::users::UsersConfig;
-use crate::mqtt::router::{system_publish, MqttRouter, RouterHandle};
-use crate::mqtt::session::{InactiveSessions, SessionStore};
-use crate::mqtt::KeepAlive;
 use crate::mqtt::{client_id, ClientId, ClientIndex, ConnectionId};
+use crate::mqtt::broker::socket::{DirectSocket, MqttSocket};
+use crate::mqtt::broker::tls::TlsAcceptor;
+use crate::mqtt::broker::websocket::WebsocketAcceptor;
+use crate::mqtt::KeepAlive;
+use crate::mqtt::router::{MqttRouter, RouterHandle, system_publish};
+use crate::mqtt::session::{InactiveSessions, SessionStore};
 use crate::password::PasswordHashingPool;
 use crate::tce_message::{TimestampSeconds, Transaction, TransactionData};
 
 use super::session::Will;
 
 mod connection;
+mod socket;
+mod tls;
+mod websocket;
 
 // The MQTT spec imposes a maximum topic length of 64 KiB but implementations can impose a smaller limit
 const TOPIC_MAX_LENGTH: usize = 1024;
@@ -64,16 +71,12 @@ const TOPIC_MAX_LENGTH: usize = 1024;
 // TODO: make this configurable
 const TOPIC_ALIAS_MAX: u16 = 100;
 
-struct BrokerTls {
-    acceptor: tokio_rustls::TlsAcceptor,
-    listener: TcpListener,
-}
-
 pub struct MqttBroker {
     listen_addr: SocketAddr,
 
     listener: TcpListener,
-    tls: Option<BrokerTls>,
+    tls: Option<TlsAcceptor>,
+    websocket: Option<WebsocketAcceptor>,
 
     token: CancellationToken,
 
@@ -170,6 +173,7 @@ impl MqttBroker {
     pub async fn bind(
         listen_addr: SocketAddr,
         tls_config: Option<TlsConfig>,
+        ws_config: Option<WsConfig>,
         users: UsersConfig,
         tce_platform: Option<Arc<Platform>>,
         tce_messages: Option<MessageStream>,
@@ -180,26 +184,20 @@ impl MqttBroker {
             .wrap_err_with(|| format!("failed to bind listen_addr: {}", listen_addr))?;
 
         let tls = match tls_config {
-            Some(tls_config) => {
-                let listen_addr = tls_config.socket_addr;
-                let tls_acceptor = {
-                    let config = tokio_rustls::rustls::ServerConfig::builder()
-                        .with_safe_defaults()
-                        .with_no_client_auth()
-                        .with_single_cert(tls_config.cert_chain, tls_config.key)?;
-
-                    tokio_rustls::TlsAcceptor::from(Arc::new(config))
-                };
-
-                let tls_listener = TcpListener::bind(listen_addr)
+            Some(tls_config) => Some(
+                TlsAcceptor::bind(tls_config)
                     .await
-                    .wrap_err_with(|| format!("failed to bind listen_addr: {}", listen_addr))?;
+                    .wrap_err("failed to create TlsAcceptor")?,
+            ),
+            None => None,
+        };
 
-                Some(BrokerTls {
-                    acceptor: tls_acceptor,
-                    listener: tls_listener,
-                })
-            }
+        let websocket = match ws_config {
+            Some(ws_config) => Some(
+                WebsocketAcceptor::bind(ws_config.websockets_addr)
+                    .await
+                    .wrap_err("failed to create WebsocketAcceptor")?,
+            ),
             None => None,
         };
 
@@ -213,6 +211,7 @@ impl MqttBroker {
             listen_addr,
             listener,
             tls,
+            websocket,
             token,
             clients: Default::default(),
             pending_wills: Default::default(),
@@ -244,10 +243,11 @@ impl MqttBroker {
         let tce_platform = self.shared.tce_platform.clone();
 
         while !shutdown {
-            let tls_listener_fut =
-                OptionFuture::from(self.tls.as_ref().map(|it| it.listener.accept()));
+            let tls_accept_fut = OptionFuture::from(self.tls.as_mut().map(|it| it.accept()));
 
-            let tcd_platform_fut =
+            let ws_accept_fut = OptionFuture::from(self.websocket.as_mut().map(|it| it.accept()));
+
+            let tce_platform_fut =
                 OptionFuture::from(tce_platform.as_ref().map(|k| k.reserve_tx()));
 
             tokio::select! {
@@ -277,8 +277,13 @@ impl MqttBroker {
                 res = self.listener.accept() => {
                     self.handle_accept(res);
                 }
-                Some(res) = tls_listener_fut => {
-                    self.handle_tls_accept(res).await;
+                Some(res) = tls_accept_fut => {
+                    let socket = res.wrap_err("error from TlsAcceptor")?;
+                    self.add_connection(socket);
+                }
+                Some(res) = ws_accept_fut => {
+                    let socket = res.wrap_err("error from WebsocketAcceptor")?;
+                    self.add_connection(socket);
                 }
                 Some(event) = self.broker_rx.recv() => {
                     self.handle_event(event).await;
@@ -290,7 +295,7 @@ impl MqttBroker {
                 Some(event) = self.inactive_sessions.next_event() => {
                     self.handle_inactive_session_event(event)?;
                 }
-                Some(Ok(permit)) = tcd_platform_fut, if !self.pending_wills.is_empty() => {
+                Some(Ok(permit)) = tce_platform_fut, if !self.pending_wills.is_empty() => {
                     // technically a bug if this fails, but it doesn't really matter.
                     if let Some(will) = self.pending_wills.pop_front() {
                         dispatch_will(&mut self.router, Some(permit), will.client_id, will.client_idx, will.will)
@@ -347,7 +352,7 @@ impl MqttBroker {
     fn handle_accept(&mut self, result: std::io::Result<(TcpStream, SocketAddr)>) {
         match result {
             Ok((stream, remote_addr)) => {
-                tracing::info!(%remote_addr, "connection received");
+                tracing::info!(%remote_addr, "accepted new connection");
 
                 // Disable Nagle's algorithm since we always send complete packets.
                 // https://en.wikipedia.org/wiki/Nagle's_algorithm
@@ -356,62 +361,20 @@ impl MqttBroker {
                     tracing::debug!(?e, "error setting TCP_NODELAY on socket");
                 }
 
-                let child_token = self.token.child_token();
-                let connection_id = self.connections.insert(child_token.clone());
-
-                let conn = Connection::new(
-                    connection_id,
-                    stream,
-                    remote_addr,
-                    child_token,
-                    self.shared.clone(),
-                );
-
-                self.tasks.spawn(conn.run());
+                self.add_connection(DirectSocket::new(remote_addr, stream));
             }
             // TODO: Some kinds of accept failures are probably fatal
             Err(e) => tracing::error!(?e, "accept failed"),
         }
     }
 
-    async fn handle_tls_accept(&mut self, result: std::io::Result<(TcpStream, SocketAddr)>) {
-        match result {
-            Ok((stream, remote_addr)) => {
-                tracing::info!(%remote_addr, "connection received");
+    fn add_connection<S: MqttSocket>(&mut self, socket: S) {
+        let child_token = self.token.child_token();
+        let connection_id = self.connections.insert(child_token.clone());
 
-                // Disable Nagle's algorithm since we always send complete packets.
-                // https://en.wikipedia.org/wiki/Nagle's_algorithm
-                if let Err(e) = stream.set_nodelay(true) {
-                    // It's unclear how this could actually fail and what it means when it does.
-                    tracing::debug!(?e, "error setting TCP_NODELAY on socket");
-                }
+        let conn = Connection::new(connection_id, socket, child_token, self.shared.clone());
 
-                let stream = self
-                    .tls
-                    .as_ref()
-                    .unwrap()
-                    .acceptor
-                    .accept(stream)
-                    .await
-                    .map_err(|_| todo!())
-                    .unwrap();
-
-                let child_token = self.token.child_token();
-                let connection_id = self.connections.insert(child_token.clone());
-
-                let conn = Connection::new(
-                    connection_id,
-                    stream,
-                    remote_addr,
-                    child_token,
-                    self.shared.clone(),
-                );
-
-                self.tasks.spawn(conn.run());
-            }
-            // TODO: Some kinds of accept failures are probably fatal
-            Err(e) => tracing::error!(?e, "accept failed"),
-        }
+        self.tasks.spawn(conn.run());
     }
 
     fn handle_session_takeover(&mut self, takeover: SessionTakeover) {

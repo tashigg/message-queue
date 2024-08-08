@@ -41,8 +41,9 @@ pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<Publish, Erro
     Ok(publish)
 }
 
-pub fn write(publish: &Publish, buffer: &mut BytesMut) -> Result<usize, Error> {
+pub fn write(publish: &Publish, buffer: &mut Vec<u8>) -> Result<usize, Error> {
     let len = publish.len();
+    reserve_buffer(buffer, len);
 
     let dup = publish.dup as u8;
     let qos = publish.qos as u8;

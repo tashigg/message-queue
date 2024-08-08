@@ -23,8 +23,10 @@ pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<PubAck, Error
     Ok(puback)
 }
 
-pub fn write(puback: &PubAck, buffer: &mut BytesMut) -> Result<usize, Error> {
+pub fn write(puback: &PubAck, buffer: &mut Vec<u8>) -> Result<usize, Error> {
     let len = len();
+    reserve_buffer(buffer, len);
+
     buffer.put_u8(0x40);
     let count = write_remaining_length(buffer, len)?;
     buffer.put_u16(puback.pkid);

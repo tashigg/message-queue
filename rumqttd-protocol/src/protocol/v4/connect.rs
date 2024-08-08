@@ -1,5 +1,6 @@
-use super::*;
 use bytes::{Buf, Bytes};
+
+use super::*;
 
 fn len(connect: &Connect, login: &Option<Login>, will: &Option<LastWill>) -> usize {
     let mut len = 2 + "MQTT".len() // protocol name
@@ -63,9 +64,11 @@ pub fn write(
     connect: &Connect,
     login: &Option<Login>,
     will: &Option<LastWill>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
     let len = len(connect, login, will);
+    reserve_buffer(buffer, len);
+
     buffer.put_u8(0b0001_0000);
     let count = write_remaining_length(buffer, len)?;
     write_mqtt_string(buffer, "MQTT");
@@ -127,7 +130,7 @@ mod will {
         Ok(last_will)
     }
 
-    pub fn write(will: &LastWill, buffer: &mut BytesMut) -> Result<u8, Error> {
+    pub fn write(will: &LastWill, buffer: &mut Vec<u8>) -> Result<u8, Error> {
         let mut connect_flags = 0;
 
         connect_flags |= 0x04 | (will.qos as u8) << 3;
@@ -182,7 +185,7 @@ mod login {
         len
     }
 
-    pub fn write(login: &Login, buffer: &mut BytesMut) -> u8 {
+    pub fn write(login: &Login, buffer: &mut Vec<u8>) -> u8 {
         let mut connect_flags = 0;
         if !login.username.is_empty() {
             connect_flags |= 0x80;

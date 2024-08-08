@@ -1,10 +1,11 @@
-use super::*;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
 use std::{
     convert::{TryFrom, TryInto},
     slice::Iter,
-    str::Utf8Error,
 };
+
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+
+use super::*;
 
 mod connack;
 mod connect;
@@ -232,18 +233,18 @@ fn read_mqtt_string(stream: &mut Bytes) -> Result<String, Error> {
 }
 
 /// Serializes bytes to stream (including length)
-fn write_mqtt_bytes(stream: &mut BytesMut, bytes: &[u8]) {
+fn write_mqtt_bytes(stream: &mut Vec<u8>, bytes: &[u8]) {
     stream.put_u16(bytes.len() as u16);
     stream.extend_from_slice(bytes);
 }
 
 /// Serializes a string to stream
-fn write_mqtt_string(stream: &mut BytesMut, string: &str) {
+fn write_mqtt_string(stream: &mut Vec<u8>, string: &str) {
     write_mqtt_bytes(stream, string.as_bytes());
 }
 
 /// Writes remaining length to stream and returns number of bytes for remaining length
-pub fn write_remaining_length(stream: &mut BytesMut, len: usize) -> Result<usize, Error> {
+pub fn write_remaining_length(stream: &mut Vec<u8>, len: usize) -> Result<usize, Error> {
     if len > 268_435_455 {
         return Err(Error::PayloadTooLong);
     }
@@ -278,6 +279,11 @@ fn len_len(len: usize) -> usize {
     } else {
         1
     }
+}
+
+fn reserve_buffer(buffer: &mut Vec<u8>, remaining_len: usize) {
+    // Length of the fixed header (packet type, flags, remaining length) plus the rest of the packet
+    buffer.reserve(1 + len_len(remaining_len) + remaining_len)
 }
 
 // this maybe should be part of the packet type parsing?
@@ -371,7 +377,7 @@ impl Protocol for V4 {
         Ok(packet)
     }
 
-    fn write(&self, packet: Packet, buffer: &mut BytesMut) -> Result<usize, Error> {
+    fn write(&self, packet: Packet, buffer: &mut Vec<u8>) -> Result<usize, Error> {
         let size = match packet {
             Packet::Connect(connect, None, last_will, None, login) => {
                 connect::write(&connect, &login, &last_will, buffer)?

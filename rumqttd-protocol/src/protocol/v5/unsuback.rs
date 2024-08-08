@@ -44,10 +44,12 @@ pub fn read(
 pub fn write(
     unsuback: &UnsubAck,
     properties: &Option<UnsubAckProperties>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
-    buffer.put_u8(0xB0);
     let remaining_len = len(unsuback, properties);
+    reserve_buffer(buffer, remaining_len);
+
+    buffer.put_u8(0xB0);
     let remaining_len_bytes = write_remaining_length(buffer, remaining_len)?;
 
     buffer.put_u16(unsuback.pkid);
@@ -117,7 +119,7 @@ mod properties {
         }))
     }
 
-    pub fn write(properties: &UnsubAckProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &UnsubAckProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let len = len(properties);
         write_remaining_length(buffer, len)?;
 

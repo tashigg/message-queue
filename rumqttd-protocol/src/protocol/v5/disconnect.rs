@@ -63,18 +63,19 @@ pub fn read(
 pub fn write(
     disconnect: &Disconnect,
     properties: &Option<DisconnectProperties>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
+    let len = len(disconnect, properties);
+    reserve_buffer(buffer, len);
+
     buffer.put_u8(0xE0);
 
-    let length = len(disconnect, properties);
-
-    if length == 2 {
+    if len == 2 {
         buffer.put_u8(0x00);
-        return Ok(length);
+        return Ok(len);
     }
 
-    let len_len = write_remaining_length(buffer, length)?;
+    let len_len = write_remaining_length(buffer, len)?;
 
     buffer.put_u8(code(disconnect.reason_code));
 
@@ -84,7 +85,7 @@ pub fn write(
         write_remaining_length(buffer, 0)?;
     }
 
-    Ok(1 + len_len + length)
+    Ok(1 + len_len + len)
 }
 
 mod properties {
@@ -168,7 +169,7 @@ mod properties {
         Ok(Some(properties))
     }
 
-    pub fn write(properties: &DisconnectProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &DisconnectProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let length = len(properties);
         write_remaining_length(buffer, length)?;
 

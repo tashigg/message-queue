@@ -279,18 +279,18 @@ fn read_mqtt_string(stream: &mut Bytes) -> Result<String, Error> {
 }
 
 /// Serializes bytes to stream (including length)
-fn write_mqtt_bytes(stream: &mut BytesMut, bytes: &[u8]) {
+fn write_mqtt_bytes(stream: &mut Vec<u8>, bytes: &[u8]) {
     stream.put_u16(bytes.len() as u16);
     stream.extend_from_slice(bytes);
 }
 
 /// Serializes a string to stream
-fn write_mqtt_string(stream: &mut BytesMut, string: &str) {
+fn write_mqtt_string(stream: &mut Vec<u8>, string: &str) {
     write_mqtt_bytes(stream, string.as_bytes());
 }
 
 /// Writes remaining length to stream and returns number of bytes for remaining length
-fn write_remaining_length(stream: &mut BytesMut, len: usize) -> Result<usize, Error> {
+fn write_remaining_length(stream: &mut Vec<u8>, len: usize) -> Result<usize, Error> {
     if len > 268_435_455 {
         return Err(Error::PayloadTooLong);
     }
@@ -325,6 +325,11 @@ fn len_len(len: usize) -> usize {
     } else {
         1
     }
+}
+
+fn reserve_buffer(buffer: &mut Vec<u8>, remaining_len: usize) {
+    // Length of the fixed header (packet type, flags, remaining length) plus the rest of the packet
+    buffer.reserve(1 + len_len(remaining_len) + remaining_len)
 }
 
 /// After collecting enough bytes to frame a packet (packet's frame())
@@ -486,7 +491,7 @@ impl Protocol for V5 {
         Ok(packet)
     }
 
-    fn write(&self, packet: Packet, buffer: &mut BytesMut) -> Result<usize, Error> {
+    fn write(&self, packet: Packet, buffer: &mut Vec<u8>) -> Result<usize, Error> {
         let size = match packet {
             Packet::Connect(
                 connect,

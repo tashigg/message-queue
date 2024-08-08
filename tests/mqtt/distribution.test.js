@@ -86,20 +86,36 @@ describe("publish to node 1, receive from node2", () => {
         // Note: if you use `localhost` here the TLS stack will try to verify it against the subjectAltName
         // on the server's TLS certificate. Using an IP address appears to bypass that.
         const client1 = await mqtt.connectAsync("mqtts://127.0.0.1:8883", {
-            // Defaults to 4 otherwise
-            protocolVersion: 5,
+            // Test v4 (3.1.1) and v5 (5.0) simultaneously
+            protocolVersion: 4,
             servername: "broker1.example.com",
             ca: fs.readFileSync("foxmq.d/key_0.crt"),
             minVersion: "TLSv1.3"
         });
-        const client2 = await mqtt.connectAsync(
-            "mqtts://127.0.0.1:8884",
-            {
-                protocolVersion: 5,
-                servername: "broker2.example.com",
-                ca: fs.readFileSync("foxmq.d/key_1.crt"),
-                minVersion: "TLSv1.3"
-            });
+        const client2 = await mqtt.connectAsync("mqtts://127.0.0.1:8884", {
+            protocolVersion: 5,
+            servername: "broker2.example.com",
+            ca: fs.readFileSync("foxmq.d/key_1.crt"),
+            minVersion: "TLSv1.3"
+        });
+
+        await client2.subscribeAsync("weather");
+
+        await client1.publishAsync("weather", "cloudy");
+
+        const [topic, message] = await events.once(client2, 'message');
+
+        console.log(topic.toString() + " message received: " + message.toString());
+        expect(topic.toString()).toBe("weather");
+        expect(message.toString()).toBe("cloudy");
+        await client1.endAsync();
+        await client2.endAsync();
+    });
+
+    test("synchronously, over Websockets", async () => {
+        // Test v4 (3.1.1) and v5 (5.0) simultaneously
+        const client1 = await mqtt.connectAsync("ws://127.0.0.1:8080", { protocolVersion: 4 });
+        const client2 = await mqtt.connectAsync("ws://127.0.0.1:8080", { protocolVersion: 5 });
 
         await client2.subscribeAsync("weather");
 

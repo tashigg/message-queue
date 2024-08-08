@@ -25,9 +25,11 @@ pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<SubAck, Error
     Ok(suback)
 }
 
-pub fn write(suback: &SubAck, buffer: &mut BytesMut) -> Result<usize, Error> {
-    buffer.put_u8(0x90);
+pub fn write(suback: &SubAck, buffer: &mut Vec<u8>) -> Result<usize, Error> {
     let remaining_len = suback.len();
+    reserve_buffer(buffer, remaining_len);
+
+    buffer.put_u8(0x90);
     let remaining_len_bytes = write_remaining_length(buffer, remaining_len)?;
 
     buffer.put_u16(suback.pkid);

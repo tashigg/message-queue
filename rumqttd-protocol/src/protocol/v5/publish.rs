@@ -60,9 +60,10 @@ pub fn read(
 pub fn write(
     publish: &Publish,
     properties: &Option<PublishProperties>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
     let len = len(publish, properties);
+    reserve_buffer(buffer, len);
 
     let dup = publish.dup as u8;
     let qos = publish.qos as u8;
@@ -211,7 +212,7 @@ mod properties {
         }))
     }
 
-    pub fn write(properties: &PublishProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &PublishProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let len = len(properties);
         write_remaining_length(buffer, len)?;
 

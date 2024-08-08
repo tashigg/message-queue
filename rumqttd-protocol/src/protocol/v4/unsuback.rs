@@ -1,5 +1,6 @@
+use bytes::{Buf, BufMut, Bytes};
+
 use super::*;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<UnsubAck, Error> {
     if fixed_header.remaining_len != 2 {
@@ -17,8 +18,10 @@ pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<UnsubAck, Err
     Ok(unsuback)
 }
 
-pub fn write(unsuback: &UnsubAck, buffer: &mut BytesMut) -> Result<usize, Error> {
+pub fn write(unsuback: &UnsubAck, buffer: &mut Vec<u8>) -> Result<usize, Error> {
+    const LEN: usize = 4;
+    reserve_buffer(buffer, LEN);
     buffer.put_slice(&[0xB0, 0x02]);
     buffer.put_u16(unsuback.pkid);
-    Ok(4)
+    Ok(LEN)
 }

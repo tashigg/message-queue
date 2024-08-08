@@ -64,9 +64,11 @@ pub fn read(
 pub fn write(
     puback: &PubAck,
     properties: &Option<PubAckProperties>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
     let len = len(puback, properties);
+    reserve_buffer(buffer, len);
+
     buffer.put_u8(0x40);
 
     let count = write_remaining_length(buffer, len)?;
@@ -142,7 +144,7 @@ mod properties {
         }))
     }
 
-    pub fn write(properties: &PubAckProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &PubAckProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let len = len(properties);
         write_remaining_length(buffer, len)?;
 

@@ -41,12 +41,12 @@ pub fn read(
 pub fn write(
     unsubscribe: &Unsubscribe,
     properties: &Option<UnsubscribeProperties>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
-    buffer.put_u8(0xA2);
-
-    // write remaining length
     let remaining_len = len(unsubscribe, properties);
+    reserve_buffer(buffer, remaining_len);
+
+    buffer.put_u8(0xA2);
     let remaining_len_bytes = write_remaining_length(buffer, remaining_len)?;
 
     // write packet id
@@ -108,7 +108,7 @@ mod properties {
         Ok(Some(UnsubscribeProperties { user_properties }))
     }
 
-    pub fn write(properties: &UnsubscribeProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &UnsubscribeProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let len = len(properties);
         write_remaining_length(buffer, len)?;
 
