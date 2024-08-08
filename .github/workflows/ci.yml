@@ -62,7 +62,7 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
           chmod 400 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
@@ -102,7 +102,7 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
           chmod 400 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
@@ -136,7 +136,7 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-agent -a ${SSH_AUTH_SOCK}
-          ssh-add - <<< "${{ secrets.TCE_DEPLOY_KEY }}"
+          ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
 
       - name: Build and run the message queue brokers
         run: ./run.sh
@@ -192,7 +192,7 @@ jobs:
         run: |
           eval "$(ssh-agent -s)"
           mkdir -p .ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> .ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> .ssh/id_ed25519
           chmod 400 .ssh/id_ed25519
           ssh-add .ssh/id_ed25519
           
@@ -241,8 +241,8 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          # Rewrite line endings in `TCE_DEPLOY_KEY` to LF with trailing newline
-          Set-Content -Path ~/.ssh/id_ed25519 -NoNewline -Value ((('${{ secrets.TCE_DEPLOY_KEY }}' -split '\r?\n') -join "`n") + "`n")
+          # Rewrite line endings in `TASHIBOT_SSH_KEY` to LF with trailing newline
+          Set-Content -Path ~/.ssh/id_ed25519 -NoNewline -Value ((('${{ secrets.TASHIBOT_SSH_KEY }}' -split '\r?\n') -join "`n") + "`n")
           ssh-keyscan github.com >> ~/.ssh/known_hosts
 
       - name: Test Github SSH
@@ -297,7 +297,7 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
           chmod 400 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
@@ -347,7 +347,7 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
           chmod 400 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
