@@ -6,8 +6,6 @@ const events = require("node:events");
 const timers = require("node:timers/promises");
 
 describe("publish to node 1, receive from node2", () => {
-    // Putting tests in a `describe()` block appears to cause them to execute sequentially.
-    // This way we can avoid any unintentional cross-pollination between tests.
     test("synchronously", async () => {
         // Test v4 (3.1.1) and v5 (5.0) simultaneously
         const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 4 });
@@ -99,14 +97,14 @@ describe("publish to node 1, receive from node2", () => {
             minVersion: "TLSv1.3"
         });
 
-        await client2.subscribeAsync("weather");
+        await client2.subscribeAsync("weather/singapore");
 
-        await client1.publishAsync("weather", "cloudy");
+        await client1.publishAsync("weather/singapore", "cloudy");
 
         const [topic, message] = await events.once(client2, 'message');
 
         console.log(topic.toString() + " message received: " + message.toString());
-        expect(topic.toString()).toBe("weather");
+        expect(topic.toString()).toBe("weather/singapore");
         expect(message.toString()).toBe("cloudy");
         await client1.endAsync();
         await client2.endAsync();
@@ -117,14 +115,14 @@ describe("publish to node 1, receive from node2", () => {
         const client1 = await mqtt.connectAsync("ws://127.0.0.1:8080", { protocolVersion: 4 });
         const client2 = await mqtt.connectAsync("ws://127.0.0.1:8081", {protocolVersion: 5});
 
-        await client2.subscribeAsync("weather");
+        await client2.subscribeAsync("weather/los_angeles");
 
-        await client1.publishAsync("weather", "cloudy");
+        await client1.publishAsync("weather/los_angeles", "cloudy");
 
         const [topic, message] = await events.once(client2, 'message');
 
         console.log(topic.toString() + " message received: " + message.toString());
-        expect(topic.toString()).toBe("weather");
+        expect(topic.toString()).toBe("weather/los_angeles");
         expect(message.toString()).toBe("cloudy");
         await client1.endAsync();
         await client2.endAsync();
