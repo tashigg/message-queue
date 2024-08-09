@@ -123,12 +123,6 @@ jobs:
       - name: Build and run the message queue brokers
         run: ./run.sh
 
-      - name: Smoke test
-        # May stall on some checks; keep trucking with the rest of the tests.
-        timeout-minutes: 5
-        # Run all tests on both versions
-        run: docker run --net=host hivemq/mqtt-cli test -a
-
       # actions/setup-node@v4 doesn't seem to work, I didn't investigate.
       - name: Install Node and NPM
         run: |
@@ -145,8 +139,19 @@ jobs:
           npm i
           npm test
 
+      - name: Get Service Logs
+        if: ${{ failure () }}
+        run: docker compose logs
+
+      # Run this after our own tests to not pollute the logs.
+      - name: Smoke test
+        # May stall on some checks; keep trucking with the rest of the tests.
+        timeout-minutes: 5
+        # Run all tests on both versions
+        run: docker run --net=host hivemq/mqtt-cli test -a
+
       - name: Stop the message queue
-        if: always()
+        if: ${{ always() }}
         run: docker compose stop
 
   tmq-build-macos:
