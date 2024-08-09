@@ -50,7 +50,7 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin + 'static> MqttSocket for DirectSo
     }
 
     async fn write_take_all(&mut self, buf: &mut Vec<u8>) -> eyre::Result<()> {
-        self.stream.write_all(&buf).await?;
+        self.stream.write_all(buf).await?;
         buf.clear();
         Ok(())
     }

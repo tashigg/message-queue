@@ -115,7 +115,7 @@ describe("publish to node 1, receive from node2", () => {
     test("synchronously, over Websockets", async () => {
         // Test v4 (3.1.1) and v5 (5.0) simultaneously
         const client1 = await mqtt.connectAsync("ws://127.0.0.1:8080", { protocolVersion: 4 });
-        const client2 = await mqtt.connectAsync("ws://127.0.0.1:8080", { protocolVersion: 5 });
+        const client2 = await mqtt.connectAsync("ws://127.0.0.1:8081", {protocolVersion: 5});
 
         await client2.subscribeAsync("weather");
 

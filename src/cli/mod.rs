@@ -18,6 +18,7 @@ pub struct Args {
 }
 
 #[derive(clap::Subcommand, Clone, Debug)]
+#[allow(clippy::large_enum_variant)] // not moved around enough to matter
 pub enum Command {
     /// Start the message broker and connect to a FoxMQ cluster.
     Run(RunArgs),

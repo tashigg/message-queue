@@ -7,6 +7,8 @@ use color_eyre::eyre::WrapErr;
 use futures::{SinkExt, TryStreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinSet;
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
@@ -109,7 +111,10 @@ async fn handshake(remote_addr: SocketAddr, stream: TcpStream) -> eyre::Result<M
         tracing::debug!(?e, "error setting TCP_NODELAY on socket");
     }
 
-    let stream = tokio_tungstenite::accept_async(stream)
+    let stream = tokio_tungstenite::accept_hdr_async(
+        stream,
+        require_mqtt_subprotocol,
+    )
         .await
         .wrap_err("error from accept_sync")?;
 
@@ -117,4 +122,32 @@ async fn handshake(remote_addr: SocketAddr, stream: TcpStream) -> eyre::Result<M
         remote_addr,
         stream,
     })
+}
+
+fn require_mqtt_subprotocol(req: &Request, mut resp: Response) -> Result<Response, ErrorResponse> {
+    let protocols = req.headers().get_all("Sec-Websocket-Protocol");
+
+    let has_mqtt_subprotocol = protocols.iter().any(|protocol| {
+        // Really annoying that there still isn't something like `memchr()` in `std`.
+        // We don't need to go overboard with validation here
+        protocol
+            .as_bytes()
+            .windows(4)
+            .any(|it| it == b"mqtt")
+    });
+
+    if !has_mqtt_subprotocol {
+        return Err(
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Some(
+                    "The client MUST include \"mqtt\" in the list of WebSocket Sub Protocols it offers [MQTT-6.0.0-3]".to_string()
+                ))
+                .expect("BUG: ErrorResponse construction should not fail here")
+        );
+    }
+
+    resp.headers_mut().insert("Sec-Websocket-Protocol", HeaderValue::from_static("mqtt"));
+
+    Ok(resp)
 }

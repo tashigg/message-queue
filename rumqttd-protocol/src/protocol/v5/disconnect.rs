@@ -1,9 +1,8 @@
 use std::convert::{TryFrom, TryInto};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes};
 
 use super::*;
-
 use super::{property, PropertyType};
 
 fn len(disconnect: &Disconnect, properties: &Option<DisconnectProperties>) -> usize {
@@ -201,7 +200,6 @@ mod properties {
 #[cfg(test)]
 mod test {
     use super::*;
-    use bytes::BytesMut;
 
     #[test]
     fn disconnect1_parsing_works() {
@@ -225,7 +223,7 @@ mod test {
 
     #[test]
     fn disconnect1_encoding_works() {
-        let mut buffer = BytesMut::new();
+        let mut buffer = Vec::new();
         let disconnect = Disconnect {
             reason_code: DisconnectReasonCode::NormalDisconnection,
         };
@@ -287,7 +285,7 @@ mod test {
 
     #[test]
     fn disconnect2_encoding_works() {
-        let mut buffer = BytesMut::new();
+        let mut buffer = Vec::new();
 
         let (disconnect, properties) = sample2();
         let expected = sample_bytes2();

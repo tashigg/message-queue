@@ -14,6 +14,7 @@ services:
       - ./foxmq.d:/home/message-queue/foxmq.d
     ports:
       - "1883:1883"
+      - "8080:8080"
       - "8883:8883"
     networks:
       mesh-app-bridge:
@@ -25,6 +26,7 @@ services:
     command: > # Folds newlines so we don't have to escape them in the command itself.
       run
       --mqtts
+      --websockets
       --secret-key-file foxmq.d/key_0.pem
       --tls-cert-file=foxmq.d/key_0.crt
       --server-name broker1.example.com
@@ -39,6 +41,7 @@ services:
       - ./foxmq.d:/home/message-queue/foxmq.d
     ports:
       - "1884:1883"
+      - "8081:8080"
       - "8884:8883"
     networks:
       mesh-app-bridge:
@@ -49,6 +52,7 @@ services:
     command: >
       run
       --mqtts
+      --websockets
       --secret-key-file foxmq.d/key_1.pem
       --tls-cert-file=foxmq.d/key_1.crt
       --server-name broker2.example.com
