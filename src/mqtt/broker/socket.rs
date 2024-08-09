@@ -21,7 +21,7 @@ pub trait MqttSocket: Send + Unpin + 'static {
     fn write_take_all(
         &mut self,
         buf: &mut Vec<u8>,
-    ) -> impl Future<Output=eyre::Result<()>> + Send;
+    ) -> impl Future<Output = eyre::Result<()>> + Send;
 
     fn shutdown(&mut self) -> impl Future<Output = eyre::Result<()>> + Send;
 }

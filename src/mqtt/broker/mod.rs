@@ -21,13 +21,13 @@ use rumqttd_protocol::QoS;
 
 use crate::cli::run::WsConfig;
 use crate::config::users::UsersConfig;
-use crate::mqtt::{client_id, ClientId, ClientIndex, ConnectionId};
 use crate::mqtt::broker::socket::{DirectSocket, MqttSocket};
 use crate::mqtt::broker::tls::TlsAcceptor;
 use crate::mqtt::broker::websocket::WebsocketAcceptor;
-use crate::mqtt::KeepAlive;
-use crate::mqtt::router::{MqttRouter, RouterHandle, system_publish};
+use crate::mqtt::router::{system_publish, MqttRouter, RouterHandle};
 use crate::mqtt::session::{InactiveSessions, SessionStore};
+use crate::mqtt::KeepAlive;
+use crate::mqtt::{client_id, ClientId, ClientIndex, ConnectionId};
 use crate::password::PasswordHashingPool;
 use crate::tce_message::{TimestampSeconds, Transaction, TransactionData};
 

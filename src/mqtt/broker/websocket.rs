@@ -111,10 +111,7 @@ async fn handshake(remote_addr: SocketAddr, stream: TcpStream) -> eyre::Result<M
         tracing::debug!(?e, "error setting TCP_NODELAY on socket");
     }
 
-    let stream = tokio_tungstenite::accept_hdr_async(
-        stream,
-        require_mqtt_subprotocol,
-    )
+    let stream = tokio_tungstenite::accept_hdr_async(stream, require_mqtt_subprotocol)
         .await
         .wrap_err("error from accept_sync")?;
 
@@ -130,10 +127,7 @@ fn require_mqtt_subprotocol(req: &Request, mut resp: Response) -> Result<Respons
     let has_mqtt_subprotocol = protocols.iter().any(|protocol| {
         // Really annoying that there still isn't something like `memchr()` in `std`.
         // We don't need to go overboard with validation here
-        protocol
-            .as_bytes()
-            .windows(4)
-            .any(|it| it == b"mqtt")
+        protocol.as_bytes().windows(4).any(|it| it == b"mqtt")
     });
 
     if !has_mqtt_subprotocol {
@@ -147,7 +141,8 @@ fn require_mqtt_subprotocol(req: &Request, mut resp: Response) -> Result<Respons
         );
     }
 
-    resp.headers_mut().insert("Sec-Websocket-Protocol", HeaderValue::from_static("mqtt"));
+    resp.headers_mut()
+        .insert("Sec-Websocket-Protocol", HeaderValue::from_static("mqtt"));
 
     Ok(resp)
 }

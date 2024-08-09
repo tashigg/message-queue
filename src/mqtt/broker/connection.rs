@@ -1,9 +1,9 @@
-use std::{cmp, iter};
 use std::fmt::{Debug, Display};
 use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{cmp, iter};
 
 use bytes::BytesMut;
 use color_eyre::eyre;
@@ -16,24 +16,24 @@ use tokio_util::sync::CancellationToken;
 
 use protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
-    DisconnectReasonCode, Packet, PingResp, Protocol, PubAck, PubAckReason, Publish, PublishProperties,
-    PubRec, PubRecReason, QoS, SubAck, Subscribe, SubscribeProperties, SubscribeReasonCode,
+    DisconnectReasonCode, Packet, PingResp, Protocol, PubAck, PubAckReason, PubRec, PubRecReason,
+    Publish, PublishProperties, QoS, SubAck, Subscribe, SubscribeProperties, SubscribeReasonCode,
     UnsubAck, UnsubAckReason, Unsubscribe,
 };
 use rumqttd_protocol as protocol;
 use rumqttd_protocol::{PubComp, PubCompReason, PubRel, PubRelReason};
 
-use crate::mqtt::{client_id, ClientId, ClientIndex, connect, ConnectionId, DynProtocol, publish};
-use crate::mqtt::broker::{BrokerEvent, ConnectionData, Shared, TOPIC_ALIAS_MAX, TOPIC_MAX_LENGTH};
 use crate::mqtt::broker::socket::MqttSocket;
+use crate::mqtt::broker::{BrokerEvent, ConnectionData, Shared, TOPIC_ALIAS_MAX, TOPIC_MAX_LENGTH};
 use crate::mqtt::connect::ConnectPacket;
-use crate::mqtt::KeepAlive;
 use crate::mqtt::mailbox::OpenMailbox;
 use crate::mqtt::packets::{IncomingPacketSet, IncomingSub, IncomingUnsub, PacketId};
 use crate::mqtt::publish::ValidateError;
 use crate::mqtt::router::{FilterProperties, RouterConnection, RouterMessage, SubscriptionId};
 use crate::mqtt::session::{Session, SessionStore};
 use crate::mqtt::trie::Filter;
+use crate::mqtt::KeepAlive;
+use crate::mqtt::{client_id, connect, publish, ClientId, ClientIndex, ConnectionId, DynProtocol};
 use crate::tce_message::{PublishMeta, Transaction, TransactionData};
 
 // TODO: make this configurable
