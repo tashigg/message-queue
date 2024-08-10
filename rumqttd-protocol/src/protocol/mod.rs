@@ -1,15 +1,15 @@
 #![allow(dead_code, unused)]
 
-pub mod v4;
-pub mod v5;
-
-use std::{io, str::Utf8Error, string::FromUtf8Error};
+use std::str::Utf8Error;
 
 /// This module is the place where all the protocol specifics gets abstracted
 /// out and creates a structures which are common across protocols. Since,
 /// MQTT is the core protocol that this broker supports, a lot of structs closely
 /// map to what MQTT specifies in its protocol
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+
+pub mod v4;
+pub mod v5;
 
 // TODO: Handle the cases when there are no properties using Inner struct, so
 // handling of properties can be made simplier internally
@@ -742,5 +742,5 @@ pub enum Error {
 
 pub trait Protocol {
     fn read_mut(&mut self, stream: &mut BytesMut, max_size: usize) -> Result<Packet, Error>;
-    fn write(&self, packet: Packet, write: &mut BytesMut) -> Result<usize, Error>;
+    fn write(&self, packet: Packet, write: &mut Vec<u8>) -> Result<usize, Error>;
 }

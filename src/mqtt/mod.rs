@@ -5,7 +5,11 @@
 //! The protocol specification for MQTT v5 can be found at:
 //! https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html
 use bytes::BytesMut;
+
+pub use client_id::ClientId;
+pub use keep_alive::KeepAlive;
 pub use rumqttd_protocol as protocol;
+use rumqttd_protocol::{Packet, Protocol};
 
 pub mod broker;
 pub mod client_id;
@@ -25,10 +29,6 @@ mod router;
 
 mod keep_alive;
 mod packets;
-
-pub use client_id::ClientId;
-pub use keep_alive::KeepAlive;
-use rumqttd_protocol::{Packet, Protocol};
 
 slotmap::new_key_type! {
     struct ConnectionId;
@@ -74,7 +74,7 @@ impl Protocol for DynProtocol {
         }
     }
 
-    fn write(&self, packet: Packet, write: &mut BytesMut) -> Result<usize, protocol::Error> {
+    fn write(&self, packet: Packet, write: &mut Vec<u8>) -> Result<usize, protocol::Error> {
         match self {
             Self::V5 => protocol::v5::V5.write(packet, write),
             Self::V4 => protocol::v4::V4.write(packet, write),

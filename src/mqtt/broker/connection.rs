@@ -1,18 +1,19 @@
-use crate::mqtt::broker::{BrokerEvent, ConnectionData, Shared, TOPIC_ALIAS_MAX, TOPIC_MAX_LENGTH};
-use crate::mqtt::packets::{IncomingPacketSet, IncomingSub, IncomingUnsub, PacketId};
-use crate::mqtt::publish::ValidateError;
-use crate::mqtt::router::{FilterProperties, RouterConnection, RouterMessage, SubscriptionId};
-use crate::mqtt::session::{Session, SessionStore};
-use crate::mqtt::trie::Filter;
-use crate::mqtt::{client_id, connect, publish, ClientId, ClientIndex, ConnectionId, DynProtocol};
-use crate::tce_message::{PublishMeta, Transaction, TransactionData};
-use bytes::BytesMut;
+use std::fmt::{Debug, Display};
+use std::pin::Pin;
+use std::str::FromStr;
+use std::sync::Arc;
+use std::time::Duration;
+use std::{cmp, iter};
 
-use crate::mqtt::connect::ConnectPacket;
-use crate::mqtt::mailbox::OpenMailbox;
-use crate::mqtt::KeepAlive;
+use bytes::BytesMut;
+use color_eyre::eyre;
 use der::Encode;
 use futures::future::OptionFuture;
+use tashi_collections::FnvHashMap;
+use tokio::sync::oneshot;
+use tokio::time::{Instant, Sleep};
+use tokio_util::sync::CancellationToken;
+
 use protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,
     DisconnectReasonCode, Packet, PingResp, Protocol, PubAck, PubAckReason, PubRec, PubRecReason,
@@ -21,18 +22,19 @@ use protocol::{
 };
 use rumqttd_protocol as protocol;
 use rumqttd_protocol::{PubComp, PubCompReason, PubRel, PubRelReason};
-use std::fmt::{Debug, Display};
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::Duration;
-use std::{cmp, io, iter};
-use tashi_collections::FnvHashMap;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::sync::oneshot;
-use tokio::time::{Instant, Sleep};
-use tokio_util::sync::CancellationToken;
+
+use crate::mqtt::broker::socket::MqttSocket;
+use crate::mqtt::broker::{BrokerEvent, ConnectionData, Shared, TOPIC_ALIAS_MAX, TOPIC_MAX_LENGTH};
+use crate::mqtt::connect::ConnectPacket;
+use crate::mqtt::mailbox::OpenMailbox;
+use crate::mqtt::packets::{IncomingPacketSet, IncomingSub, IncomingUnsub, PacketId};
+use crate::mqtt::publish::ValidateError;
+use crate::mqtt::router::{FilterProperties, RouterConnection, RouterMessage, SubscriptionId};
+use crate::mqtt::session::{Session, SessionStore};
+use crate::mqtt::trie::Filter;
+use crate::mqtt::KeepAlive;
+use crate::mqtt::{client_id, connect, publish, ClientId, ClientIndex, ConnectionId, DynProtocol};
+use crate::tce_message::{PublishMeta, Transaction, TransactionData};
 
 // TODO: make this configurable
 /// Default value for the Receive Maximum we send to the client,
@@ -44,19 +46,17 @@ const DEFAULT_RECEIVE_MAXIMUM: u16 = 1024;
 /// Shorter than `max_keep_alive` because otherwise it opens us up to a DoS attack.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub struct Connection<S: AsyncRead + AsyncWrite> {
+pub struct Connection<S: MqttSocket> {
     id: ConnectionId,
-
-    remote_addr: SocketAddr,
 
     client_id: Option<ClientId>,
     client_index: Option<ClientIndex>,
     keep_alive: KeepAlive,
 
     protocol: DynProtocol,
-    stream: S,
+    socket: S,
     read_buf: BytesMut,
-    write_buf: BytesMut,
+    write_buf: Vec<u8>,
 
     // Cache the `Sleep` instance for the read timeout to avoid the overhead of re-registering it
     // every time `recv()` is cancelled due to the `select!{}` in `run()`.
@@ -98,9 +98,9 @@ pub enum ConnectionError {
         protocol::Error,
     ),
     #[error("error reading from socket: {0}")]
-    ReadError(#[source] io::Error),
+    ReadError(#[source] eyre::Error),
     #[error("error writing socket: {0}")]
-    WriteError(#[source] io::Error),
+    WriteError(#[source] eyre::Error),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -119,25 +119,18 @@ macro_rules! disconnect (
 );
 
 // fixme: overly lazy, doesn't need to be unpin probably.
-impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
-    pub fn new(
-        id: ConnectionId,
-        stream: S,
-        remote_addr: SocketAddr,
-        token: CancellationToken,
-        shared: Arc<Shared>,
-    ) -> Self {
+impl<S: MqttSocket> Connection<S> {
+    pub fn new(id: ConnectionId, socket: S, token: CancellationToken, shared: Arc<Shared>) -> Self {
         Connection {
             id,
-            remote_addr,
             client_id: None,
             client_index: None,
             keep_alive: KeepAlive::default(),
             // This doesn't actually matter until after we read the CONNECT packet.
             protocol: DynProtocol::V5,
-            stream,
+            socket,
             read_buf: BytesMut::with_capacity(8192),
-            write_buf: BytesMut::with_capacity(8192),
+            write_buf: Vec::with_capacity(8192),
             read_timeout: Some(Box::pin(tokio::time::sleep(CONNECT_TIMEOUT))),
             token,
             shared,
@@ -147,7 +140,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         }
     }
 
-    #[tracing::instrument(name = "Connection::run", skip_all, fields(remote_addr=%self.remote_addr))]
+    #[tracing::instrument(name = "Connection::run", skip_all, fields(remote_addr=%self.socket.remote_addr()))]
     pub async fn run(mut self) -> ConnectionData {
         let mut store = SessionStore::default();
 
@@ -392,7 +385,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
 
                 // > On receipt of DISCONNECT, the receiver:
                 // > SHOULD close the Network Connection.
-                self.stream
+                self.socket
                     .shutdown()
                     .await
                     .map_err(ConnectionError::WriteError)?;
@@ -957,8 +950,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             let mut read_timeout: OptionFuture<_> = self.read_timeout.as_mut().into();
 
             while read_len > 0 {
+                // Ensure there is sufficient space in the buffer for our packet.
+                self.read_buf.reserve(read_len);
+
                 tokio::select! {
-                    res = self.stream.read_buf(&mut self.read_buf) => {
+                    res = self.socket.read(&mut self.read_buf) => {
                         let read = res.map_err(ConnectionError::ReadError)?;
 
                         if read == 0 {
@@ -1003,7 +999,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
         tokio::select! {
             // TODO: we don't necessarily have to wait for the whole buffer to be flushed,
             // but then we need to be careful to limit how many packets we buffer at once.
-            res = self.stream.write_all_buf(&mut self.write_buf) => {
+            res = self.socket.write_take_all(&mut self.write_buf) => {
                 res.map_err(ConnectionError::WriteError)?;
                 Ok(ConnectionStatus::Running)
             }
@@ -1045,7 +1041,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             }),
         ))
         .await?;
-        self.stream
+        self.socket
             .shutdown()
             .await
             .map_err(ConnectionError::WriteError)?;
@@ -1082,7 +1078,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Connection<S> {
             .await?;
         }
 
-        self.stream.shutdown().await?;
+        self.socket.shutdown().await?;
         Ok(())
     }
 }

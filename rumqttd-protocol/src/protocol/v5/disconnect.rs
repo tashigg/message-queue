@@ -1,9 +1,8 @@
 use std::convert::{TryFrom, TryInto};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes};
 
 use super::*;
-
 use super::{property, PropertyType};
 
 fn len(disconnect: &Disconnect, properties: &Option<DisconnectProperties>) -> usize {
@@ -63,18 +62,19 @@ pub fn read(
 pub fn write(
     disconnect: &Disconnect,
     properties: &Option<DisconnectProperties>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
+    let len = len(disconnect, properties);
+    reserve_buffer(buffer, len);
+
     buffer.put_u8(0xE0);
 
-    let length = len(disconnect, properties);
-
-    if length == 2 {
+    if len == 2 {
         buffer.put_u8(0x00);
-        return Ok(length);
+        return Ok(len);
     }
 
-    let len_len = write_remaining_length(buffer, length)?;
+    let len_len = write_remaining_length(buffer, len)?;
 
     buffer.put_u8(code(disconnect.reason_code));
 
@@ -84,7 +84,7 @@ pub fn write(
         write_remaining_length(buffer, 0)?;
     }
 
-    Ok(1 + len_len + length)
+    Ok(1 + len_len + len)
 }
 
 mod properties {
@@ -168,7 +168,7 @@ mod properties {
         Ok(Some(properties))
     }
 
-    pub fn write(properties: &DisconnectProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &DisconnectProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let length = len(properties);
         write_remaining_length(buffer, length)?;
 
@@ -200,7 +200,6 @@ mod properties {
 #[cfg(test)]
 mod test {
     use super::*;
-    use bytes::BytesMut;
 
     #[test]
     fn disconnect1_parsing_works() {
@@ -224,7 +223,7 @@ mod test {
 
     #[test]
     fn disconnect1_encoding_works() {
-        let mut buffer = BytesMut::new();
+        let mut buffer = Vec::new();
         let disconnect = Disconnect {
             reason_code: DisconnectReasonCode::NormalDisconnection,
         };
@@ -286,7 +285,7 @@ mod test {
 
     #[test]
     fn disconnect2_encoding_works() {
-        let mut buffer = BytesMut::new();
+        let mut buffer = Vec::new();
 
         let (disconnect, properties) = sample2();
         let expected = sample_bytes2();

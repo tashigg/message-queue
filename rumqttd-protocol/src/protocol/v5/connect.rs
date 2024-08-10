@@ -54,7 +54,7 @@ pub fn write(
     will: &Option<LastWill>,
     will_properties: &Option<LastWillProperties>,
     l: &Option<Login>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
     let len = {
         let mut len = 2 + "MQTT".len() // protocol name
@@ -85,6 +85,8 @@ pub fn write(
 
         len
     };
+
+    buffer.reserve(len);
 
     buffer.put_u8(0b0001_0000);
     let count = write_remaining_length(buffer, len)?;
@@ -176,7 +178,7 @@ mod will {
     pub fn write(
         will: &LastWill,
         properties: &Option<LastWillProperties>,
-        buffer: &mut BytesMut,
+        buffer: &mut Vec<u8>,
     ) -> Result<u8, Error> {
         let mut connect_flags = 0;
 
@@ -304,7 +306,7 @@ mod willproperties {
         }))
     }
 
-    pub fn write(properties: &LastWillProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &LastWillProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let len = len(properties);
         write_remaining_length(buffer, len)?;
 
@@ -390,7 +392,7 @@ mod login {
         len
     }
 
-    pub fn write(login: &Login, buffer: &mut BytesMut) -> u8 {
+    pub fn write(login: &Login, buffer: &mut Vec<u8>) -> u8 {
         let mut connect_flags = 0;
         if !login.username.is_empty() {
             connect_flags |= 0x80;
@@ -531,7 +533,7 @@ mod properties {
         len
     }
 
-    pub fn write(properties: &ConnectProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &ConnectProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let len = len(properties);
         write_remaining_length(buffer, len)?;
 

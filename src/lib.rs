@@ -1,7 +1,7 @@
-use color_eyre::eyre;
 use color_eyre::eyre::eyre;
 use color_eyre::eyre::WrapErr;
 pub use color_eyre::eyre::{Error, Result};
+pub use tashi_consensus_engine::map_join_error;
 use tracing_subscriber::EnvFilter;
 
 use crate::cli::LogFormat;
@@ -39,9 +39,4 @@ pub fn bootstrap(log_format: LogFormat) -> Result<()> {
     .map_err(|e| eyre!(e))?;
 
     Ok(())
-}
-
-pub fn map_join_error(e: tokio::task::JoinError) -> Error {
-    // The logic to extract the panic payload already exists in TCE, it's just tied to `anyhow`
-    eyre::eyre!(tashi_consensus_engine::map_join_error(e))
 }

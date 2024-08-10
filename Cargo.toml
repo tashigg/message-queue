@@ -14,11 +14,11 @@ default-run = "foxmq"
 
 [dependencies.tashi-consensus-engine]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "1eee142878381bea9fb8660a509b88d571152ebc"
+rev = "7378c531021a72f67e369c18cbcbe16af5c63ea9"
 
 [dependencies.tashi-collections]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "1eee142878381bea9fb8660a509b88d571152ebc"
+rev = "7378c531021a72f67e369c18cbcbe16af5c63ea9"
 
 [dependencies]
 argon2 = { version = "0.5.3", features = ["std"] }
@@ -33,16 +33,19 @@ rumqttd-protocol.workspace = true
 serde = { version = "1.0.196", features = ["derive", "std"] }
 thiserror = "1.0.56"
 toml = { version = "0.8.10", features = ["parse"] }
-tracing = "0.1.40"
+tracing = { version = "0.1.40", features = ["attributes"] }
 triomphe = "0.1.11"
 tokio-util = "0.7.10"
-der = { version = "0.7.8", features = ["derive"] }
+der = { version = "0.7.9", features = ["derive"] }
 futures = { version = "0.3.30", features = ["std", "alloc"] }
 slotmap = "1.0.7"
 arbitrary = { version = "1", optional = true, features = ["derive"] }
 # TODO: upgrade RusTLS in TCE and message-queue [TG-461]
 tokio-rustls = "0.24.1"
 rustls-pemfile = "1.0.4"
+
+# For WebSockets support
+tokio-tungstenite = "0.23.1"
 
 [dependencies.clap]
 version = "4.5.0"

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use color_eyre::eyre;
 use color_eyre::eyre::Context;
-use tashi_consensus_engine::sync::quic::QuicSocket;
+use tashi_consensus_engine::quic::QuicSocket;
 use tashi_consensus_engine::{Platform, SecretKey};
 use tokio_rustls::rustls;
 
@@ -53,6 +53,9 @@ pub struct RunArgs {
     #[command(flatten)]
     pub tls_config: TlsConfig,
 
+    #[command(flatten)]
+    pub ws_config: WsConfig,
+
     /// The directory containing `address-book.toml` and (optionally) `users.toml`.
     #[clap(default_value = "foxmq.d/")]
     pub config_dir: PathBuf,
@@ -99,6 +102,18 @@ pub struct TlsConfig {
     /// or the main secret key (`--secret-key`/`--secret-key-file`).
     #[clap(long)]
     pub tls_cert_file: Option<PathBuf>,
+}
+
+/// Websockets configuration
+#[derive(clap::Args, Debug, Clone)]
+pub struct WsConfig {
+    /// Enable listening for MQTT-over-Websockets connections on a separate socket (0.0.0.0:8080 by default).
+    #[clap(long)]
+    pub websockets: bool,
+
+    /// The TCP socket address to listen for MQTT-over-Websockets (`ws`) connections from clients.
+    #[clap(long, default_value = "0.0.0.0:8080")]
+    pub websockets_addr: SocketAddr,
 }
 
 impl SecretKeyOpt {
@@ -197,7 +212,9 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
         })
         .transpose()?;
 
-    main_async(args, users, tce_config, tls_config)
+    let ws_config = args.ws_config.websockets.then(|| args.ws_config.clone());
+
+    main_async(args, users, tce_config, tls_config, ws_config)
 }
 
 // `#[tokio::main]` doesn't have to be attached to the actual `main()`, and it can accept args
@@ -207,6 +224,7 @@ async fn main_async(
     users: UsersConfig,
     tce_config: Option<tashi_consensus_engine::Config>,
     tls_config: Option<broker::TlsConfig>,
+    ws_config: Option<WsConfig>,
 ) -> crate::Result<()> {
     let (tce_platform, tce_message_stream) = match tce_config {
         Some(tce_config) => {
@@ -224,6 +242,7 @@ async fn main_async(
     let mut broker = MqttBroker::bind(
         args.mqtt_addr,
         tls_config,
+        ws_config,
         users,
         tce_platform.clone(),
         tce_message_stream,
@@ -268,7 +287,6 @@ fn create_tce_config(
 
     Ok(tashi_consensus_engine::Config::new(secret_key)
         .initial_nodes(nodes)
-        .use_alpn(true)
         .enable_hole_punching(false)
         // TODO: we can dispatch messages before they come to consensus
         // but we need to make sure we don't duplicate PUBLISHes.

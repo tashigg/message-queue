@@ -32,16 +32,13 @@ jobs:
         with:
           submodules: true
 
-      - name: Install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+      - name: Install/Update rust
+        run: |
+          rustup update stable
+          rustup component add rustfmt
 
       - name: Check rust code formatting
-        uses: actions-rs/cargo@v1
-        with:
-          command: fmt
-          args: --check --all
+        run: cargo fmt --check --all
 
   tmq-check:
     name: Check
@@ -50,38 +47,29 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: Install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: clippy
 
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
           chmod 400 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Install/Update Rust
+        run: |
+          rustup update stable
+          rustup component add clippy
+
       - name: Check
-        uses: actions-rs/cargo@v1
-        with:
-          command: check
-          args: --all-targets
+        run: cargo check --all-targets
 
       # Deny warnings but don't break `main` when new ones are added
       - name: Lint
         if: ${{ github.ref_name != 'main' }}
-        uses: actions-rs/cargo@v1
-        with:
-          command: clippy
-          args: --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
   tmq-tests-unit:
     name: Unit Tests
@@ -93,27 +81,21 @@ jobs:
         with:
           submodules: true
 
-      - name: Install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          components: clippy
-
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
           chmod 400 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
 
+      - name: Install/Update Rust
+        run: rustup update stable
+
       - name: Unit Tests
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --lib
+        run: cargo test --lib
 
   # Future note: add integration tests as their own pass.
 
@@ -136,16 +118,10 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           ssh-agent -a ${SSH_AUTH_SOCK}
-          ssh-add - <<< "${{ secrets.TCE_DEPLOY_KEY }}"
+          ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
 
       - name: Build and run the message queue brokers
         run: ./run.sh
-
-      - name: Smoke test
-        # May stall on some checks; keep trucking with the rest of the tests.
-        timeout-minutes: 5
-        # Run all tests on both versions
-        run: docker run --net=host hivemq/mqtt-cli test -a
 
       # actions/setup-node@v4 doesn't seem to work, I didn't investigate.
       - name: Install Node and NPM
@@ -163,8 +139,19 @@ jobs:
           npm i
           npm test
 
+      - name: Get Service Logs
+        if: ${{ failure () }}
+        run: docker compose logs
+
+      # Run this after our own tests to not pollute the logs.
+      - name: Smoke test
+        # May stall on some checks; keep trucking with the rest of the tests.
+        timeout-minutes: 5
+        # Run all tests on both versions
+        run: docker run --net=host hivemq/mqtt-cli test -a
+
       - name: Stop the message queue
-        if: always()
+        if: ${{ always() }}
         run: docker compose stop
 
   tmq-build-macos:
@@ -177,31 +164,27 @@ jobs:
       GIT_SSH_COMMAND: ssh -i .ssh/id_ed25519
     steps:
       - name: Check out
-        uses: actions/checkout@v2
-
-      # TODO: get rid of this unmaintained action
-      # `rustup` should just be installed directly on the macOS runner but the `rust-cache` action assumes
-      # that it can just trash `~/.cargo/bin` and I can't think of another place to install `rustup` that won't break
-      # some other assumption(s). This action at least handles all that for us.
-      - name: Install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+        uses: actions/checkout@v4
 
       - name: Add TCE Deploy Key
         run: |
           eval "$(ssh-agent -s)"
           mkdir -p .ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> .ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> .ssh/id_ed25519
           chmod 400 .ssh/id_ed25519
           ssh-add .ssh/id_ed25519
           
           bash docker-util/test-ssh.sh
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
         with:
           key: macOS-build
+
+      - name: Install/Update Rust
+        run: |
+          rustup update stable
+          rustup target add x86_64-apple-darwin
 
       - name: Build
         run: |
@@ -232,17 +215,13 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out
-        uses: actions/checkout@v2
-
-      - name: Install rust
-        run: |
-          rustup toolchain install stable
+        uses: actions/checkout@v4
 
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          # Rewrite line endings in `TCE_DEPLOY_KEY` to LF with trailing newline
-          Set-Content -Path ~/.ssh/id_ed25519 -NoNewline -Value ((('${{ secrets.TCE_DEPLOY_KEY }}' -split '\r?\n') -join "`n") + "`n")
+          # Rewrite line endings in `TASHIBOT_SSH_KEY` to LF with trailing newline
+          Set-Content -Path ~/.ssh/id_ed25519 -NoNewline -Value ((('${{ secrets.TASHIBOT_SSH_KEY }}' -split '\r?\n') -join "`n") + "`n")
           ssh-keyscan github.com >> ~/.ssh/known_hosts
 
       - name: Test Github SSH
@@ -259,9 +238,13 @@ jobs:
           exit 0      
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
         with:
           key: windows-2022-build
+
+      - name: Install/Update rust
+        run: |
+          rustup update stable
 
       - name: Build
         run: cargo build --release
@@ -285,26 +268,22 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Check out
-        uses: actions/checkout@v2
-
-      # TODO: get rid of this unmaintained action
-      # `rustup` should be usable directly but it's not installed in our runner image.
-      - name: Install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+        uses: actions/checkout@v4
 
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
           chmod 400 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
       - name: Rust cache
-        uses: Swatinem/rust-cache@v1
+        uses: Swatinem/rust-cache@v2
         with:
           key: linux-build
+
+      - name: Install/Update Rust
+        run: rustup update stable
 
       - name: Build
         run: cargo build --release
@@ -347,7 +326,7 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TCE_DEPLOY_KEY }}' >> ~/.ssh/id_ed25519
+          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
           chmod 400 ~/.ssh/id_ed25519
           ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
 
@@ -364,12 +343,8 @@ jobs:
           path: ~/.cargo
           key: generate-licenses
 
-      # TODO: get rid of this unmaintained action
-      # `rustup` should be usable directly but it's not installed in our runner image.
-      - name: Install rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
+      - name: Install/Update Rust
+        run: rustup update stable
 
       - name: Install cargo-bundle-licenses
         run: cargo install cargo-bundle-licenses

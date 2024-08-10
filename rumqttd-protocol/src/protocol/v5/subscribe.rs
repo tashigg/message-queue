@@ -67,13 +67,15 @@ pub fn read(
 pub fn write(
     subscribe: &Subscribe,
     properties: &Option<SubscribeProperties>,
-    buffer: &mut BytesMut,
+    buffer: &mut Vec<u8>,
 ) -> Result<usize, Error> {
+    let remaining_len = len(subscribe, properties);
+    reserve_buffer(buffer, remaining_len);
+
     // write packet type
     buffer.put_u8(0x82);
 
     // write remaining length
-    let remaining_len = len(subscribe, properties);
     let remaining_len_bytes = write_remaining_length(buffer, remaining_len)?;
 
     // write packet id
@@ -136,7 +138,7 @@ mod filter {
         Ok(filters)
     }
 
-    pub fn write(filter: &Filter, buffer: &mut BytesMut) {
+    pub fn write(filter: &Filter, buffer: &mut Vec<u8>) {
         let mut options = 0;
         options |= filter.qos as u8;
 
@@ -217,7 +219,7 @@ mod properties {
         }))
     }
 
-    pub fn write(properties: &SubscribeProperties, buffer: &mut BytesMut) -> Result<(), Error> {
+    pub fn write(properties: &SubscribeProperties, buffer: &mut Vec<u8>) -> Result<(), Error> {
         let len = len(properties);
         write_remaining_length(buffer, len)?;
 

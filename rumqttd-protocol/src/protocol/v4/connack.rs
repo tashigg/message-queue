@@ -1,5 +1,6 @@
+use bytes::{Buf, BufMut, Bytes};
+
 use super::*;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 fn len() -> usize {
     // sesssion present + code
@@ -23,8 +24,10 @@ pub fn read(fixed_header: FixedHeader, mut bytes: Bytes) -> Result<ConnAck, Erro
     Ok(connack)
 }
 
-pub fn write(connack: &ConnAck, buffer: &mut BytesMut) -> Result<usize, Error> {
+pub fn write(connack: &ConnAck, buffer: &mut Vec<u8>) -> Result<usize, Error> {
     let len = len();
+    reserve_buffer(buffer, len);
+
     buffer.put_u8(0x20);
 
     let count = write_remaining_length(buffer, len)?;
