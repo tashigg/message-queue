@@ -1,8 +1,9 @@
 use color_eyre::eyre::eyre;
 use color_eyre::eyre::WrapErr;
 pub use color_eyre::eyre::{Error, Result};
-pub use tashi_consensus_engine::map_join_error;
 use tracing_subscriber::EnvFilter;
+
+pub use tashi_consensus_engine::{flatten_task_result, map_join_error};
 
 use crate::cli::LogFormat;
 

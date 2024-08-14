@@ -118,7 +118,6 @@ macro_rules! disconnect (
     };
 );
 
-// fixme: overly lazy, doesn't need to be unpin probably.
 impl<S: MqttSocket> Connection<S> {
     pub fn new(id: ConnectionId, socket: S, token: CancellationToken, shared: Arc<Shared>) -> Self {
         Connection {

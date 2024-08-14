@@ -179,6 +179,8 @@ impl MqttBroker {
         tce_messages: Option<MessageStream>,
         max_keep_alive: KeepAlive,
     ) -> crate::Result<Self> {
+        let token = CancellationToken::new();
+
         let listener = TcpListener::bind(listen_addr)
             .await
             .wrap_err_with(|| format!("failed to bind listen_addr: {}", listen_addr))?;
@@ -194,7 +196,7 @@ impl MqttBroker {
 
         let websocket = match ws_config {
             Some(ws_config) => Some(
-                WebsocketAcceptor::bind(ws_config.websockets_addr)
+                WebsocketAcceptor::bind(ws_config.websockets_addr, token.child_token())
                     .await
                     .wrap_err("failed to create WebsocketAcceptor")?,
             ),
@@ -202,8 +204,6 @@ impl MqttBroker {
         };
 
         let (broker_tx, broker_rx) = mpsc::channel(100);
-
-        let token = CancellationToken::new();
 
         let router = MqttRouter::start(tce_platform.clone(), tce_messages, token.clone());
 
