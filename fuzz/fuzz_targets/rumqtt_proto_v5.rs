@@ -12,7 +12,7 @@ fuzz_target!(|data: &[u8]| {
     let max = data.len();
     let mut bytes = BytesMut::from(data);
 
-    let mut output = BytesMut::new();
+    let mut output = Vec::new();
 
     if let Ok(res) = black_box(V5.read_mut(&mut bytes, max)) {
         V5.write(res, &mut output).unwrap();
