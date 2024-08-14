@@ -44,9 +44,6 @@ arbitrary = { version = "1", optional = true, features = ["derive"] }
 tokio-rustls = "0.24.1"
 rustls-pemfile = "1.0.4"
 
-# For WebSockets support
-tokio-tungstenite = "0.23.1"
-
 [dependencies.clap]
 version = "4.5.0"
 features = ["derive", "env"]
@@ -58,6 +55,11 @@ features = ["full"]
 [dependencies.tracing-subscriber]
 version = "0.3.18"
 features = ["json", "env-filter"]
+
+# For Websockets (and later, possibly HTTP API) support
+[dependencies.axum]
+version = "0.7.5"
+features = ["ws"]
 
 # Recommended by `color-eyre` to improve performance:
 # https://docs.rs/color-eyre/latest/color_eyre/#improving-perf-on-debug-builds

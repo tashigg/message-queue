@@ -1,67 +1,76 @@
 use std::mem;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::str;
 
+use axum::async_trait;
+use axum::extract::rejection::ExtensionRejection;
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
+use axum::extract::ws::{Message, WebSocket};
+use axum::extract::{ConnectInfo, FromRequestParts, State, WebSocketUpgrade};
+use axum::http::request::Parts;
+use axum::http::{HeaderValue, StatusCode};
+use axum::response::{ErrorResponse, IntoResponse, Response};
+use axum::routing::{get, Router};
 use bytes::BytesMut;
 use color_eyre::eyre;
 use color_eyre::eyre::WrapErr;
 use futures::{SinkExt, TryStreamExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::task::JoinSet;
-use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
-use tokio_tungstenite::tungstenite::http::{HeaderValue, StatusCode};
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::WebSocketStream;
+use tashi_consensus_engine::flatten_task_result;
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 
 use crate::mqtt::broker::socket::MqttSocket;
 
 pub struct WebsocketAcceptor {
-    listener: TcpListener,
-    // To not block the main broker loop, we spawn tasks to complete Websocket upgrades.
-    handshaking: JoinSet<eyre::Result<MqttWebsocket>>,
+    serve_task: JoinHandle<eyre::Result<()>>,
+    new_sockets_rx: mpsc::Receiver<MqttWebsocket>,
 }
 
 pub struct MqttWebsocket {
     remote_addr: SocketAddr,
-    stream: WebSocketStream<TcpStream>,
+    websocket: WebSocket,
 }
 
 impl WebsocketAcceptor {
-    pub async fn bind(addr: SocketAddr) -> eyre::Result<Self> {
+    pub async fn bind(addr: SocketAddr, token: CancellationToken) -> eyre::Result<Self> {
         let listener = TcpListener::bind(addr)
             .await
             .wrap_err_with(|| format!("failed to bind websockets_addr: {addr}"))?;
 
+        // Channel allocates in slabs of 32
+        let (new_sockets_tx, new_sockets_rx) = mpsc::channel(64);
+
+        let router = Router::new()
+            .route("/", get(health_check_or_handshake))
+            .fallback(handshake)
+            .with_state(new_sockets_tx)
+            .into_make_service_with_connect_info::<SocketAddr>();
+
+        let serve_task = tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(token.cancelled_owned())
+                .await
+                .wrap_err("error from axum::serve()")
+        });
+
         Ok(Self {
-            listener,
-            handshaking: JoinSet::new(),
+            serve_task,
+            new_sockets_rx,
         })
     }
     pub async fn accept(&mut self) -> eyre::Result<MqttWebsocket> {
-        loop {
-            tokio::select! {
-                res = self.listener.accept() => {
-                    let (stream, addr) = res.wrap_err("error from TcpListener.accept()")?;
-
-                    self.accepted(addr, stream);
-                }
-                Some(res) = self.handshaking.join_next() => {
-                    match res {
-                        Ok(Ok(socket)) => return Ok(socket),
-                        // Error is logged by `handshake()`
-                        Ok(Err(_)) => (),
-                        Err(e) => {
-                            tracing::debug!("error from handshake: {e}");
-                        }
-                    }
-                }
+        tokio::select! {
+            // `None` (the channel closing) will wait for the task to exit
+            Some(socket) = self.new_sockets_rx.recv() => {
+                Ok(socket)
+            }
+            res = &mut self.serve_task => {
+                flatten_task_result(res).wrap_err("error from serve_task")?;
+                eyre::bail!("serve_task exited prematurely without error")
             }
         }
-    }
-
-    fn accepted(&mut self, remote_addr: SocketAddr, stream: TcpStream) {
-        tracing::debug!(%remote_addr, "accepted new connection");
-
-        self.handshaking.spawn(handshake(remote_addr, stream));
     }
 }
 
@@ -71,12 +80,14 @@ impl MqttSocket for MqttWebsocket {
     }
 
     async fn read(&mut self, buf: &mut BytesMut) -> eyre::Result<usize> {
-        let message = self.stream.try_next().await?;
+        let message = self.websocket.try_next().await?;
 
         let Some(message) = message else { return Ok(0) };
 
         match message {
             Message::Binary(bytes) => {
+                // There isn't really any getting around this copy.
+                // Multiple MQTT packets may end up packed into the same message.
                 buf.extend_from_slice(&bytes);
                 Ok(bytes.len())
             }
@@ -88,61 +99,157 @@ impl MqttSocket for MqttWebsocket {
     }
 
     async fn write_take_all(&mut self, buf: &mut Vec<u8>) -> eyre::Result<()> {
-        // `tokio-tungstenite` _only_ works with `Vec<u8>`
+        // The websocket API works with `Vec<u8>`, not `Bytes`.
         // To avoid copying, we just take the whole buffer and send it.
-        self.stream.send(Message::Binary(mem::take(buf))).await?;
+        self.websocket.send(Message::Binary(mem::take(buf))).await?;
+        self.websocket.flush().await?;
 
         Ok(())
     }
 
     async fn shutdown(&mut self) -> eyre::Result<()> {
-        self.stream.close(None).await?;
+        // `.close()` resolves to inherent method `WebsocketStream::close(self)`
+        SinkExt::close(&mut self.websocket).await?;
 
         Ok(())
     }
 }
 
-#[tracing::instrument(skip(stream), err(level = tracing::Level::DEBUG))]
-async fn handshake(remote_addr: SocketAddr, stream: TcpStream) -> eyre::Result<MqttWebsocket> {
-    // Disable Nagle's algorithm since we always send complete packets.
-    // https://en.wikipedia.org/wiki/Nagle's_algorithm
-    if let Err(e) = stream.set_nodelay(true) {
-        // It's unclear how this could actually fail and what it means when it does.
-        tracing::debug!(?e, "error setting TCP_NODELAY on socket");
+async fn health_check_or_handshake(
+    state: State<mpsc::Sender<MqttWebsocket>>,
+    remote_addr: RemoteAddr,
+    ws_upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
+) -> Result<Response, ErrorResponse> {
+    match ws_upgrade {
+        Ok(websocket) => handshake(state, remote_addr, websocket).await,
+        Err(rejection) => {
+            // If the upgrade was rejected for a non-fatal reason
+            // (i.e. because a Websocket upgrade wasn't actually requested),
+            // then answer `200 OK` for `GET /` as a health check.
+            //
+            // This is required for deploying FoxMQ behind a GKE Ingress.
+            nonfatal_rejection(rejection)?;
+
+            Ok(StatusCode::OK.into_response())
+        }
     }
-
-    let stream = tokio_tungstenite::accept_hdr_async(stream, require_mqtt_subprotocol)
-        .await
-        .wrap_err("error from accept_sync")?;
-
-    Ok(MqttWebsocket {
-        remote_addr,
-        stream,
-    })
 }
 
-fn require_mqtt_subprotocol(req: &Request, mut resp: Response) -> Result<Response, ErrorResponse> {
-    let protocols = req.headers().get_all("Sec-Websocket-Protocol");
-
-    let has_mqtt_subprotocol = protocols.iter().any(|protocol| {
-        // Really annoying that there still isn't something like `memchr()` in `std`.
-        // We don't need to go overboard with validation here
-        protocol.as_bytes().windows(4).any(|it| it == b"mqtt")
-    });
-
-    if !has_mqtt_subprotocol {
-        return Err(
-            Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Some(
-                    "The client MUST include \"mqtt\" in the list of WebSocket Sub Protocols it offers [MQTT-6.0.0-3]".to_string()
-                ))
-                .expect("BUG: ErrorResponse construction should not fail here")
-        );
+async fn handshake(
+    State(new_sockets_tx): State<mpsc::Sender<MqttWebsocket>>,
+    RemoteAddr(remote_addr): RemoteAddr,
+    ws_upgrade: WebSocketUpgrade,
+) -> Result<Response, ErrorResponse> {
+    if new_sockets_tx.is_closed() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE.into());
     }
 
-    resp.headers_mut()
-        .insert("Sec-Websocket-Protocol", HeaderValue::from_static("mqtt"));
+    Ok(ws_upgrade
+        .protocols(["mqtt"])
+        .on_upgrade(move |websocket| async move {
+            new_sockets_tx
+                .send(MqttWebsocket {
+                    remote_addr,
+                    websocket,
+                })
+                .await
+                .ok();
+        }))
+}
 
-    Ok(resp)
+fn nonfatal_rejection(
+    rejection: WebSocketUpgradeRejection,
+) -> Result<(), WebSocketUpgradeRejection> {
+    use WebSocketUpgradeRejection::*;
+
+    match rejection {
+        // Websocket upgrade was requested but for an unsupported version
+        InvalidWebSocketVersionHeader(e) => Err(e.into()),
+        // `Sec-Websocket-Key` was not specified by the client; not a valid Websocket upgrade.
+        WebSocketKeyHeaderMissing(e) => Err(e.into()),
+        _ => Ok(()),
+    }
+}
+
+/// The client socket address. May or may not be real.
+///
+/// The client IP will be sourced from the [`X-Forwarded-For`] header, if set.
+/// This does not include the port, so the port of the remote side of the connection is used instead.
+///
+/// Otherwise, it is the socket address of the remote side of the connection.
+///
+/// Requires the use of [`axum::Router::into_make_service_with_connect_info()`]
+/// or the addition of a [`axum::extract::connect_info::MockConnectInfo`] layer for testing.
+///
+/// [`X-Forwarded-For`]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Forwarded-For
+struct RemoteAddr(SocketAddr);
+
+#[async_trait]
+impl<S> FromRequestParts<S> for RemoteAddr
+where
+    S: Send + Sync,
+{
+    type Rejection = ExtensionRejection;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let ConnectInfo(socket_addr) =
+            ConnectInfo::<SocketAddr>::from_request_parts(parts, state).await?;
+
+        let connected_addr = socket_addr.ip();
+
+        let client_addr = parts
+            .headers
+            .get("X-Forwarded-For")
+            .and_then(|val| find_client_ip(connected_addr, val))
+            .unwrap_or_else(|| socket_addr.ip());
+
+        Ok(Self(SocketAddr::new(client_addr, socket_addr.port())))
+    }
+}
+
+/// Given an `X-Forwarded-For` header, select the IP most likely to be the client's.
+#[tracing::instrument]
+fn find_client_ip(connected_addr: IpAddr, x_forwarded_for: &HeaderValue) -> Option<IpAddr> {
+    // By convention, client IP is listed first, followed by any proxies.
+    // https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/X-Forwarded-For
+    //
+    // Google's external load balancer (allocated by our K8s Ingress object)
+    // will thus list the client's IP and then its own:
+    // https://cloud.google.com/load-balancing/docs/https#x-forwarded-for_header
+    //
+    // So the simplest implementation would just look at the first IP address in the list, right?
+    // Easy-peasy.
+    //
+    // However, a malicious client could trick a naive parser by adding
+    // `X-Forwarded-For: <fake IP>` to their original request; our load balancer
+    // would then append the client IP and also its own IP to the list,
+    // putting the actual client IP in the middle.
+    //
+    // Thus, what we actually want to do is step through the list in *reverse*,
+    // finding the first IP address that *isn't* our load balancer,
+    // which we know because it's the source IP of the connection (`connected_addr`).
+    x_forwarded_for
+        .as_bytes()
+        .split(|b| *b == b',')
+        .filter_map(|addr| {
+            // By lazily validating UTF-8, we also avoid an exploit where a malicious client
+            // could break parsing by setting `X-Forwarded-For: <invalid UTF-8>`
+            //
+            // Btw, yet another API that would be amazing if it were stable: `IpAddr::parse_ascii()`
+            // https://github.com/rust-lang/rust/issues/101035
+            let addr = str::from_utf8(addr)
+                .map_err(|e| {
+                    tracing::debug!(addr=%addr.escape_ascii(), "`addr` is not valid UTF-8: {e}");
+                })
+                .ok()?;
+
+            addr.trim()
+                .parse::<IpAddr>()
+                .map_err(|e| {
+                    tracing::debug!(addr, "`addr` is not a valid IP address: {e}");
+                })
+                .ok()
+        })
+        .filter(|ip| ip != &connected_addr)
+        .next_back()
 }
