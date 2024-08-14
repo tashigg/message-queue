@@ -69,7 +69,7 @@ jobs:
       # Deny warnings but don't break `main` when new ones are added
       - name: Lint
         if: ${{ github.ref_name != 'main' }}
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   tmq-tests-unit:
     name: Unit Tests
