@@ -64,7 +64,7 @@ jobs:
           rustup component add clippy
 
       - name: Check
-        run: cargo check --all-targets
+        run: cargo check --workspace --all-targets
 
       # Deny warnings but don't break `main` when new ones are added
       - name: Lint
