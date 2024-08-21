@@ -1,0 +1,136 @@
+# We use a StatefulSet not because we need persistent volume claims,
+# but because the sticky pod identities allow us to assign a ClusterIP service to each individual pod.
+#
+# This way, the pods know exactly who they're talking to within the cluster.
+# -------------------------------
+# Headless service used by the StatefulSet for pod identity.
+apiVersion: v1
+kind: Service
+metadata:
+  name: foxmq-demo-headless
+  labels:
+    app: foxmq-demo
+spec:
+  ports: []
+  clusterIP: None
+  selector:
+    app: foxmq-demo
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: foxmq-demo
+spec:
+  selector:
+    matchLabels:
+      app: foxmq-demo
+  serviceName: "foxmq-demo-cluster"
+  replicas: 4 # NOTE: update `NUM_REPLICAS` below if you change this!
+  minReadySeconds: 10 # by default is 0
+  template:
+    metadata:
+      labels:
+        app: foxmq-demo
+    spec:
+      terminationGracePeriodSeconds: 10
+
+      volumes:
+        - name: foxmq-d
+          emptyDir:
+            sizeLimit: 10Mi
+        - name: users
+          configMap:
+            name: foxmq-demo-users
+        - name: secret-keys
+          secret:
+            secretName: foxmq-demo-secret-keys
+        - name: public-keys
+          configMap:
+            name: foxmq-demo-public-keys
+
+      initContainers:
+        - name: create-foxmq-d
+          image: debian:bookworm-slim
+          resources:
+            # Minimum resources
+            requests:
+              cpu: 10m
+            limits:
+              memory: 10Mi
+          env:
+            - name: POD_INDEX
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
+
+            # Kinda annoying that this isn't available in the downwardAPI but this is a rather niche use-case.
+            - name: NUM_REPLICAS
+              value: "4"
+
+          volumeMounts:
+            - name: users
+              mountPath: /etc/foxmq.d.in/users/
+
+            - name: secret-keys
+              mountPath: /etc/foxmq.d.in/secret-keys/
+
+            - name: public-keys
+              mountPath: /etc/foxmq.d.in/public-keys/
+
+            - name: foxmq-d
+              mountPath: /etc/foxmq.d/
+
+          # language=bash
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -ex
+              
+              cp /etc/foxmq.d.in/users/demo-$POD_INDEX.toml /etc/foxmq.d/users.toml
+              cp /etc/foxmq.d.in/secret-keys/key-$POD_INDEX.pem /etc/foxmq.d/secret-key.pem
+              
+              # Synthesize address book
+              for (( i=0; i<NUM_REPLICAS; i++ )); do
+              SERVICE_VAR_NAME="FOXMQ_DEMO_${i}_CLUSTER_SERVICE_HOST"
+              
+              echo ${!SERVICE_VAR_NAME}
+              
+              cat << EOF >> /etc/foxmq.d/address-book.toml
+              [[addresses]]
+              key = """$(cat /etc/foxmq.d.in/public-keys/key-$i.pem)"""
+              addr = "${!SERVICE_VAR_NAME}:19793"
+              EOF
+              done
+
+      containers:
+        - name: foxmq
+          image: ghcr.io/tashigg/foxmq:0.2.1
+
+          env:
+            - name: RUST_LOG
+              value: info,foxmq::mqtt:broker::connection=debug
+
+          args:
+            - run
+            - --websockets
+            - --secret-key-file=/etc/foxmq.d/secret-key.pem
+            - /etc/foxmq.d/
+
+          resources:
+            # Minimum resources
+            requests:
+              cpu: 250m
+            limits:
+              memory: 500Mi
+
+          ports:
+            - name: cluster
+              protocol: UDP
+              containerPort: 19793
+            - name: websockets
+              protocol: TCP
+              containerPort: 8080
+          volumeMounts:
+            - name: foxmq-d
+              mountPath: /etc/foxmq.d/
