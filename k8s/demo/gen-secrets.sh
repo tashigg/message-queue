@@ -8,31 +8,31 @@ if [[ -z $NUM_REPLICAS ]]; then
 cat << 'EOF'
 Usage: ./gen-secrets.sh <number of replicas> [--update] [kubectl args..]
 
-Create P-256 keypairs and user credentials for each replica in \`0 .. <number of replicas>\`.
+Create P-256 keypairs and user credentials for each replica in `0 .. <number of replicas>`.
 
 Creates two Secrets and two ConfigMaps in the current Kubernetes context and default namespace (unless otherwise specified).
 
-If \`--update\` is specified, this script will overwrite the existing items using \`kubectl apply\`.
+If `--update` is specified, this script will overwrite the existing items using `kubectl apply`.
 Otherwise, this script will fail.
 
 Each Secret or ConfigMap contains the same number of keys for the given number of replicas,
-with the suffix \`-N\` where N is the zero-based index of the replica.
+with the suffix `-N` where N is the zero-based index of the replica.
 
 * Secret: foxmq-demo-secret-keys
 
-PEM-encoded P-256 private keys for the given number of replicas as \`key-N.pem\`.
+PEM-encoded P-256 private keys for the given number of replicas as `key-N.pem`.
 
 * ConfigMap: foxmq-demo-public-keys
 
-PEM-encoded P-256 public keys for the given number of replicas as \`key-N.pem\`.
+PEM-encoded P-256 public keys for the given number of replicas as `key-N.pem`.
 
 * Secret: foxmq-demo-user-credentials
 
-A unique pair of user credentials for each replica keyed as \`demo-N: "<password>"\`.
+A unique pair of user credentials for each replica keyed as `demo-N: "<password>"`.
 
 * ConfigMap: foxmq-demo-users
 
-Users TOML files for each replica as \`users-N.toml\`.
+Users TOML files for each replica as `users-N.toml`.
 EOF
   exit 0
 fi
