@@ -1,0 +1,10 @@
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: foxmq-demo
+spec:
+  domains:
+    - node-0.demo.europe-west2.foxmq.infra.tashi.dev
+    - node-1.demo.europe-west2.foxmq.infra.tashi.dev
+    - node-2.demo.europe-west2.foxmq.infra.tashi.dev
+    - node-3.demo.europe-west2.foxmq.infra.tashi.dev

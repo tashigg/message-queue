@@ -19,6 +19,16 @@ so that the cluster may be demonstrated to be highly available.
 
 TLS is provided via [Google-managed SSL certificates][gke-ssl].
 
+### Note: Region-Specific Config
+
+`ingress.yaml` and `managed-certificate.yaml` have region-specific configs:
+
+* `ingress.yaml` requires the global static IP name which must be specific to each region.
+* `ingress.yaml` and `managed-certificate.yaml` require listing out the region-specific hostnames 
+  used for routing and SSL certificate generation, respectively.
+
+These can be found in subdirectories named by GCloud region.
+
 ### Note: Changing Replica Count
 
 As of writing, the configured replica count of the cluster is `4`.
@@ -45,7 +55,7 @@ for proper operation:
   * A Cloud DNS entry in Gcloud already exists with a wildcard domain for `*.demo.foxmq.infra.tashi.dev`;
     no DNS changes should be necessary if updating the existing Ingress.
 * `managed-certificate.yaml`: configures the SSL certificate used by the GKE Ingress controller.
-  * Entries in `.spec.domains` will need to be added or removed to match the new replica count. 
+  * Entries in `.spec.domains` will need to be added or removed to match the new replica count.
 
 [`StatefulSet`]: https://kubernetes.io/docs/concepts/workloads/controllers/statefulset/
 [gke-ssl]: https://cloud.google.com/kubernetes-engine/docs/how-to/managed-certs
