@@ -43,6 +43,7 @@ arbitrary = { version = "1", optional = true, features = ["derive"] }
 # TODO: upgrade RusTLS in TCE and message-queue [TG-461]
 tokio-rustls = "0.24.1"
 rustls-pemfile = "1.0.4"
+time = { version = "0.3.36", features = ["formatting"] }
 
 [dependencies.clap]
 version = "4.5.0"

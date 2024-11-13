@@ -1,6 +1,7 @@
 use bytes::Bytes;
 use std::num::NonZeroU32;
 use std::ops::Not;
+use time::format_description::well_known::Rfc3339;
 
 use tashi_collections::FnvHashMap;
 
@@ -350,6 +351,7 @@ pub fn txn_to_packet(
     delivery_meta: PublishMeta,
     packet_id: Option<PacketId>,
     sub_ids: &[SubscriptionId],
+    include_broker_timestamps: bool,
 ) -> Packet {
     Packet::Publish(
         Publish::with_all(
@@ -369,13 +371,28 @@ pub fn txn_to_packet(
                 };
             }
 
+            let mut user_properties =
+                clone_prop!(user_properties).map_or(vec![], |props: UserProperties| props.0);
+
+            if include_broker_timestamps {
+                let timestamp_received =
+                    time::OffsetDateTime::from_unix_timestamp(txn.timestamp_received.0 as i64)
+                        .expect("Time overflow");
+                let timestamp_received = timestamp_received
+                    .format(&Rfc3339)
+                    .expect("formatting error");
+
+                user_properties.push(("timestamp_received".to_owned(), timestamp_received))
+            }
+
             PublishProperties {
                 payload_format_indicator: clone_prop!(payload_format_indicator),
                 message_expiry_interval: clone_prop!(message_expiry_interval),
                 topic_alias: None,
                 response_topic: clone_prop!(response_topic),
                 correlation_data: clone_prop!(correlation_data).map(|bytes| bytes.0),
-                user_properties: clone_prop!(user_properties).map_or(vec![], |props| props.0),
+                user_properties: clone_prop!(user_properties)
+                    .map_or(vec![], |props: UserProperties| props.0),
 
                 // TODO: now that `rumqttd-protocol` is in-tree, just change the type there
                 subscription_identifiers: sub_ids.iter().copied().map(Into::into).collect(),

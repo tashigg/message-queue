@@ -29,7 +29,9 @@ use crate::mqtt::connect::ConnectPacket;
 use crate::mqtt::mailbox::OpenMailbox;
 use crate::mqtt::packets::{IncomingPacketSet, IncomingSub, IncomingUnsub, PacketId};
 use crate::mqtt::publish::ValidateError;
-use crate::mqtt::router::{FilterProperties, RouterConnection, RouterMessage, SubscriptionId};
+use crate::mqtt::router::{
+    FilterProperties, RouterConnection, RouterMessage, SubscribeRequest, SubscriptionId,
+};
 use crate::mqtt::session::{Session, SessionStore};
 use crate::mqtt::trie::Filter;
 use crate::mqtt::KeepAlive;
@@ -414,6 +416,7 @@ impl<S: MqttSocket> Connection<S> {
                 mail.delivery_meta,
                 Some(mail.packet_id),
                 &mail.subscription_ids,
+                mail.include_broker_timestamps,
             ))
             .await?;
 
@@ -426,6 +429,7 @@ impl<S: MqttSocket> Connection<S> {
                 PublishMeta::new(QoS::AtMostOnce, mail.retain(), false),
                 None,
                 mail.subscription_ids(),
+                mail.include_broker_timestamps,
             ))
             .await?;
         }
@@ -833,12 +837,34 @@ impl<S: MqttSocket> Connection<S> {
             has_valid_filters = true;
         }
 
+        // find the first *valid* `include_broker_timestamps` field.
+        let include_broker_timestamps = sub_props
+            .as_ref()
+            .map(|it| it.user_properties.as_slice())
+            .iter()
+            .copied()
+            .flatten()
+            .flat_map(|(k, v)| {
+                v.parse::<bool>()
+                    .ok()
+                    .filter(|_| k == "include_broker_timestamps")
+            })
+            .next()
+            .unwrap_or(false);
+
         if has_valid_filters {
             self.incoming_packets
                 .insert_sub(packet_id, IncomingSub { return_codes })
                 .expect("BUG: we should have checked `.contains()` above");
 
-            router.subscribe(packet_id, sub_id, filters).await;
+            router
+                .subscribe(SubscribeRequest {
+                    packet_id,
+                    sub_id,
+                    filters,
+                    include_broker_timestamps,
+                })
+                .await;
         } else {
             self.send(Packet::SubAck(
                 SubAck {

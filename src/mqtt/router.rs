@@ -193,24 +193,12 @@ impl RouterConnection {
         self.message_rx.recv().await
     }
 
-    pub async fn subscribe(
-        &mut self,
-        packet_id: PacketId,
-        sub_id: Option<SubscriptionId>,
-        filters: Vec<Option<(Filter, FilterProperties)>>,
-    ) {
+    pub async fn subscribe(&mut self, request: SubscribeRequest) {
         // If the channel is closed,
         // the connection will notice the next time it calls `.next_message()`.
         let _ = self
             .command_tx
-            .send((
-                self.client_index,
-                RouterCommand::Subscribe {
-                    packet_id,
-                    sub_id,
-                    filters,
-                },
-            ))
+            .send((self.client_index, RouterCommand::Subscribe(request)))
             .await;
     }
 
@@ -277,6 +265,22 @@ impl SubscriptionId {
     const MAX_VALUE_ERR: &'static str = "subscription ID exceeds the max value of 268435455";
 }
 
+pub struct SubscribeRequest {
+    pub packet_id: PacketId,
+
+    pub sub_id: Option<SubscriptionId>,
+    /// The filters to subscribe with.
+    ///
+    /// If any index is `None`, that filter failed validation in the frontend.
+    pub filters: Vec<Option<(Filter, FilterProperties)>>,
+    /// Include user-properties for message timestamps.
+    ///
+    /// Extension to the MQTT protocol.
+    ///
+    /// This applies to *all* filters.
+    pub include_broker_timestamps: bool,
+}
+
 enum RouterCommand {
     NewConnection {
         connection_id: ConnectionId,
@@ -285,14 +289,7 @@ enum RouterCommand {
         message_tx: mpsc::UnboundedSender<RouterMessage>,
         clean_session: bool,
     },
-    Subscribe {
-        packet_id: PacketId,
-        sub_id: Option<SubscriptionId>,
-        /// The filters to subscribe with.
-        ///
-        /// If any index is `None`, that filter failed validation in the frontend.
-        filters: Vec<Option<(Filter, FilterProperties)>>,
-    },
+    Subscribe(SubscribeRequest),
     Unsubscribe {
         packet_id: PacketId,
         filters: Vec<Filter>,
@@ -415,6 +412,7 @@ type SubscriptionMap = FilterTrie<HashMap<ClientIndex, Subscription>>;
 struct Subscription {
     id: Option<SubscriptionId>,
     props: FilterProperties,
+    include_broker_timestamps: bool,
 }
 
 enum PublishOrigin<'a> {
@@ -608,11 +606,7 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
                 dispatch(state, publish.into(), PublishOrigin::Local(client_idx))
             }
         },
-        RouterCommand::Subscribe {
-            packet_id,
-            sub_id,
-            filters,
-        } => handle_subscribe(state, client_idx, packet_id, sub_id, filters),
+        RouterCommand::Subscribe(request) => handle_subscribe(state, client_idx, request),
         RouterCommand::Unsubscribe { packet_id, filters } => {
             if !state.clients.contains_key(client_idx) {
                 return;
@@ -657,13 +651,7 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
     }
 }
 
-fn handle_subscribe(
-    state: &mut RouterState,
-    client_idx: ClientIndex,
-    packet_id: PacketId,
-    sub_id: Option<SubscriptionId>,
-    filters: Vec<Option<(Filter, FilterProperties)>>,
-) {
+fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: SubscribeRequest) {
     struct RetainedMessage {
         filter_qos: QoS,
         publish: Arc<PublishTrasaction>,
@@ -680,7 +668,8 @@ fn handle_subscribe(
     // Accumulate the retained messages that need to be sent out.
     let mut retained_messages = BTreeMap::new();
 
-    let reasons: Vec<_> = filters
+    let reasons: Vec<_> = request
+        .filters
         .into_iter()
         .map(|maybe_filter| {
             maybe_filter
@@ -731,7 +720,14 @@ fn handle_subscribe(
 
                     let (map, place_id) = sub_entry.or_default();
 
-                    map.insert(client_idx, Subscription { id: sub_id, props });
+                    map.insert(
+                        client_idx,
+                        Subscription {
+                            id: request.sub_id,
+                            props,
+                            include_broker_timestamps: request.include_broker_timestamps,
+                        },
+                    );
 
                     state.clients[client_idx].subscriptions[sub_kind].insert(place_id);
 
@@ -744,7 +740,7 @@ fn handle_subscribe(
 
     state.clients[client_idx]
         .try_send(RouterMessage::SubAck {
-            packet_id,
+            packet_id: request.packet_id,
             return_codes: reasons,
         })
         .ok();
@@ -757,7 +753,8 @@ fn handle_subscribe(
             // the Retain flag is always set regardless of the Retain as Published flag
             // on the subscription.
             true,
-            sub_id,
+            request.sub_id,
+            request.include_broker_timestamps,
             message.publish,
         );
 
@@ -989,6 +986,7 @@ fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: Pu
                 // Retain as Published flag handling
                 sub.props.preserve_retain && publish.meta.retain(),
                 sub.id,
+                sub.include_broker_timestamps,
                 publish.clone(),
             );
 
