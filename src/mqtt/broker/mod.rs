@@ -7,13 +7,14 @@ use color_eyre::eyre::{self, Context};
 use der::Encode;
 use futures::future::OptionFuture;
 use rand::RngCore;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use slotmap::SlotMap;
 use tashi_collections::{hash_map, HashMap};
-use tashi_consensus_engine::{MessageStream, Platform, TxnPermit, TxnTryReserveError};
+use tashi_consensus_engine::{Platform, TxnPermit, TxnTryReserveError};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
-use tokio_rustls::rustls::{Certificate, PrivateKey};
+use tokio_rustls::rustls;
 use tokio_util::sync::CancellationToken;
 
 use connection::Connection;
@@ -24,12 +25,12 @@ use crate::config::users::UsersConfig;
 use crate::mqtt::broker::socket::{DirectSocket, MqttSocket};
 use crate::mqtt::broker::tls::TlsAcceptor;
 use crate::mqtt::broker::websocket::WebsocketAcceptor;
-use crate::mqtt::router::{system_publish, MqttRouter, RouterHandle};
+use crate::mqtt::router::{system_publish, MqttRouter, RouterHandle, TceState};
 use crate::mqtt::session::{InactiveSessions, SessionStore};
 use crate::mqtt::KeepAlive;
 use crate::mqtt::{client_id, ClientId, ClientIndex, ConnectionId};
 use crate::password::PasswordHashingPool;
-use crate::tce_message::{TimestampSeconds, Transaction, TransactionData};
+use crate::transaction::{TimestampSeconds, Transaction, TransactionData};
 
 use super::session::Will;
 
@@ -165,8 +166,8 @@ struct ConnectionData {
 
 pub struct TlsConfig {
     pub socket_addr: SocketAddr,
-    pub cert_chain: Vec<Certificate>,
-    pub key: PrivateKey,
+    pub cert_chain: Vec<CertificateDer<'static>>,
+    pub key: PrivateKeyDer<'static>,
 }
 
 impl MqttBroker {
@@ -175,8 +176,7 @@ impl MqttBroker {
         tls_config: Option<TlsConfig>,
         ws_config: Option<WsConfig>,
         users: UsersConfig,
-        tce_platform: Option<Arc<Platform>>,
-        tce_messages: Option<MessageStream>,
+        tce: Option<TceState>,
         max_keep_alive: KeepAlive,
     ) -> crate::Result<Self> {
         let token = CancellationToken::new();
@@ -205,7 +205,9 @@ impl MqttBroker {
 
         let (broker_tx, broker_rx) = mpsc::channel(100);
 
-        let router = MqttRouter::start(tce_platform.clone(), tce_messages, token.clone());
+        let tce_platform = tce.as_ref().map(|tce| tce.platform.clone());
+
+        let router = MqttRouter::start(tce, token.clone());
 
         Ok(MqttBroker {
             listen_addr,
@@ -744,9 +746,9 @@ fn dispatch_will(
         permit.send(txn);
     }
 
-    // *sigh*, we need to wrap the transaction to send it over TCE, but we need to unwrap it again right after to publish a will.
-    // When/if we have multiple transaction types this is going to need an `unreachable!()` :/
-    let TransactionData::Publish(transaction) = transaction.data;
+    let TransactionData::Publish(transaction) = transaction.data else {
+        unreachable!()
+    };
 
     router.publish_will(client_idx, transaction);
 }

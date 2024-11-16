@@ -2,18 +2,20 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use color_eyre::eyre;
-use color_eyre::eyre::Context;
-use tashi_consensus_engine::quic::QuicSocket;
-use tashi_consensus_engine::{Platform, SecretKey};
-use tokio_rustls::rustls;
-
 use crate::cli::LogFormat;
 use crate::config;
 use crate::config::addresses::Addresses;
 use crate::config::users::{AuthConfig, UsersConfig};
 use crate::mqtt::broker::{self, MqttBroker};
-use crate::mqtt::KeepAlive;
+use crate::mqtt::{KeepAlive, TceState};
+use crate::transaction::AddNodeTransaction;
+use color_eyre::eyre;
+use color_eyre::eyre::Context;
+use tashi_consensus_engine::quic::QuicSocket;
+use tashi_consensus_engine::{
+    Certificate, Platform, RootCertificates, SecretKey, UnknownConnectionAction,
+};
+use tokio::sync::mpsc;
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct RunArgs {
@@ -56,6 +58,9 @@ pub struct RunArgs {
     #[command(flatten)]
     pub ws_config: WsConfig,
 
+    #[command(flatten)]
+    pub cluster_config: ClusterConfig,
+
     /// The directory containing `address-book.toml` and (optionally) `users.toml`.
     #[clap(default_value = "foxmq.d/")]
     pub config_dir: PathBuf,
@@ -92,11 +97,15 @@ pub struct TlsConfig {
 
     /// Override the secret key used for TLS handshakes.
     ///
+    /// Note: this only applies to MQTT-over-TLS connections (`--mqtts`).
+    ///
     /// Defaults to the main secret key (`--secret-key`/`--secret-key-file`).
     #[clap(long)]
     pub tls_key_file: Option<PathBuf>,
 
     /// Path to the X.509 certificate to use for TLS.
+    ///
+    /// Note: this only applies to MQTT-over-TLS connections  (`--mqtts`).
     ///
     /// Defaults to a certificate self-signed with either `--tls-key-file`
     /// or the main secret key (`--secret-key`/`--secret-key-file`).
@@ -114,6 +123,41 @@ pub struct WsConfig {
     /// The TCP socket address to listen for MQTT-over-Websockets (`ws`) connections from clients.
     #[clap(long, default_value = "0.0.0.0:8080")]
     pub websockets_addr: SocketAddr,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct ClusterConfig {
+    /// Path to a TLS certificate or certificate chain file
+    /// to present to peers on new cluster connections.
+    ///
+    /// If not set, a self-signed TLS certificate is generated on startup.
+    ///
+    /// If set, the certificate _must_ match the secret key specified by `--secret-key`
+    /// or `--secret-key-path`.
+    #[clap(long, env)]
+    pub cluster_cert: Option<PathBuf>,
+
+    /// Path to a TLS root certificate file to use for cluster operations.
+    ///
+    /// If set, all peers must present a valid TLS certificate chain that
+    /// ends with this certificate.
+    #[clap(long, env, requires("cluster_cert"))]
+    pub cluster_root_cert: Option<PathBuf>,
+
+    /// If set, admit any peer to the cluster that connects with a valid TLS certificate.
+    ///
+    /// This allows peers to connect even if they aren't in the initial address book.
+    ///
+    /// A valid certificate is any certificate chain that ends with the certificate
+    /// specified by `--cluster-root-cert`.
+    #[clap(long, env, requires("cluster_root_cert"))]
+    pub cluster_accept_peer_with_cert: bool,
+}
+
+struct TceConfig {
+    config: tashi_consensus_engine::Config,
+    roots: Option<Arc<RootCertificates>>,
+    add_nodes: mpsc::UnboundedReceiver<AddNodeTransaction>,
 }
 
 impl SecretKeyOpt {
@@ -152,15 +196,16 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
         )
     }
 
-    eyre::ensure!(!users.by_username.is_empty() || users.auth.allow_anonymous_login,);
+    eyre::ensure!(!users.by_username.is_empty() || users.auth.allow_anonymous_login);
 
     let secret_key = args.secret_key.read_key()?;
 
     // File and stdio aren't truly async in Tokio so we might as well do that before we even start the runtime
     let tce_config = match config::addresses::read(&args.config_dir.join("address-book.toml")) {
         Ok(addresses) => {
-            let tce_config = create_tce_config(secret_key.clone(), &addresses)
-                .wrap_err("error initializing TCE config")?;
+            let tce_config =
+                create_tce_config(secret_key.clone(), &addresses, &args.cluster_config)
+                    .wrap_err("error initializing TCE config")?;
 
             Some(tce_config)
         }
@@ -186,16 +231,16 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
                 let cert_pem = std::fs::read(cert_file)
                     .wrap_err_with(|| format!("error reading from {}", cert_file.display()))?;
 
-                let certs = rustls_pemfile::certs(&mut &cert_pem[..]).wrap_err_with(|| {
-                    format!(
-                        "error reading certificate chain from {}",
-                        cert_file.display()
-                    )
-                })?;
-
-                certs.into_iter().map(rustls::Certificate).collect()
+                rustls_pemfile::certs(&mut &cert_pem[..])
+                    .collect::<Result<Vec<_>, _>>()
+                    .wrap_err_with(|| {
+                        format!(
+                            "error reading certificate chain from {}",
+                            cert_file.display()
+                        )
+                    })?
             } else {
-                vec![tashi_consensus_engine::Certificate::generate_self_signed(
+                vec![Certificate::generate_self_signed(
                     &key,
                     tls_socket_addr,
                     &args.tls_config.server_name,
@@ -222,30 +267,36 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
 async fn main_async(
     args: RunArgs,
     users: UsersConfig,
-    tce_config: Option<tashi_consensus_engine::Config>,
+    tce_config: Option<TceConfig>,
     tls_config: Option<broker::TlsConfig>,
     ws_config: Option<WsConfig>,
 ) -> crate::Result<()> {
-    let (tce_platform, tce_message_stream) = match tce_config {
+    let tce = match tce_config {
         Some(tce_config) => {
-            let (tce_platform, tce_message_stream) = Platform::start(
-                tce_config,
+            let (platform, messages) = Platform::start(
+                tce_config.config,
                 QuicSocket::bind_udp(args.cluster_addr).await?,
                 false,
             )?;
 
-            (Some(Arc::new(tce_platform)), Some(tce_message_stream))
+            Some(TceState {
+                platform: Arc::new(platform),
+                messages,
+                roots: tce_config.roots,
+                add_nodes: tce_config.add_nodes,
+            })
         }
-        None => (None, None),
+        None => None,
     };
+
+    let tce_platform = tce.as_ref().map(|tce| tce.platform.clone());
 
     let mut broker = MqttBroker::bind(
         args.mqtt_addr,
         tls_config,
         ws_config,
         users,
-        tce_platform.clone(),
-        tce_message_stream,
+        tce,
         KeepAlive::from_seconds(args.max_keep_alive),
     )
     .await?;
@@ -259,7 +310,7 @@ async fn main_async(
             res = tokio::signal::ctrl_c() => {
                 res.wrap_err("error from ctrl_c() handler")?;
 
-                if let Some(platform) = tce_platform{
+                if let Some(platform) = tce_platform {
                     platform.shutdown().await;
                 }
                 break;
@@ -278,21 +329,58 @@ async fn main_async(
 fn create_tce_config(
     secret_key: SecretKey,
     addresses: &Addresses,
-) -> crate::Result<tashi_consensus_engine::Config> {
+    config: &ClusterConfig,
+) -> crate::Result<TceConfig> {
     let nodes = addresses
         .addresses
         .iter()
         .map(|address| (address.key.clone(), address.addr))
         .collect();
 
-    Ok(tashi_consensus_engine::Config::new(secret_key)
+    let mut tce_config = tashi_consensus_engine::Config::new(secret_key)
         .initial_nodes(nodes)
         .enable_hole_punching(false)
         // TODO: we can dispatch messages before they come to consensus
         // but we need to make sure we don't duplicate PUBLISHes.
         // .report_events_before_consensus(true)
         // Since a FoxMQ cluster is permissioned, don't kick failed nodes which may later recover.
-        .fallen_behind_kick_seconds(None))
+        .fallen_behind_kick_seconds(None);
+
+    if let Some(cert_path) = &config.cluster_cert {
+        tce_config = tce_config.tls_cert_chain(Certificate::load_chain_from(cert_path)?);
+    }
+
+    let roots = if let Some(root_cert_path) = &config.cluster_root_cert {
+        let roots = Arc::new(RootCertificates::read_from(root_cert_path)?);
+        tce_config = tce_config.tls_roots(roots.clone());
+        Some(roots)
+    } else {
+        None
+    };
+
+    let (add_nodes_tx, add_nodes_rx) = mpsc::unbounded_channel();
+
+    if config.cluster_accept_peer_with_cert {
+        tce_config = tce_config.on_unknown_connection(move |addr, key, certs| {
+            // Certificate chain has already been verified by TCE at this point.
+
+            add_nodes_tx
+                .send(AddNodeTransaction {
+                    socket_addr: addr.into(),
+                    key: key.clone(),
+                    certs: certs.iter().map(Into::into).collect(),
+                })
+                .ok();
+
+            Ok(UnknownConnectionAction::VoteToAddPeer)
+        });
+    }
+
+    Ok(TceConfig {
+        config: tce_config,
+        roots,
+        add_nodes: add_nodes_rx,
+    })
 }
 
 /// NOTE: uses blocking I/O internally.
