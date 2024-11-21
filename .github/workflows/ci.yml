@@ -155,7 +155,7 @@ jobs:
         run: docker compose stop
 
       - name: Run TLS Root Certificates configuration
-        working-directory: foxmq-root-ca.d
+        working-directory: tests/foxmq-root-ca.d
         run: docker compose up --build -d
 
       - name: Run TLS Root Certificates test
@@ -163,11 +163,12 @@ jobs:
 
       - name: Get Service Logs
         if: ${{ failure () }}
+        working-directory: tests/foxmq-root-ca.d
         run: docker compose logs
 
       - name: Stop the message queue
         if: ${{ always() }}
-        working-directory: foxmq-root-ca.d
+        working-directory: tests/foxmq-root-ca.d
         run: docker compose stop
 
   tmq-build-macos:
