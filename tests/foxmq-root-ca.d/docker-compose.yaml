@@ -1,0 +1,116 @@
+version: '3'
+
+services:
+  # All other brokers re-use the image built by this.
+  broker1:
+    container_name: broker1
+    build:
+      context: ../../
+      dockerfile: tests/Dockerfile
+      ssh:
+        - default
+    image: message-queue-test
+    volumes:
+      - .:/home/message-queue/foxmq.d
+    ports:
+      - "1883:1883"
+    networks:
+      mesh-app-bridge:
+        aliases:
+          - broker1.example.com
+    environment: &broker_env
+      RUST_LOG: tashi_consensus_engine=warn,tashi_crypto=debug,foxmq=trace
+    entrypoint: target/release/foxmq
+    command: > # Folds newlines so we don't have to escape them in the command itself.
+      run
+      --secret-key-file foxmq.d/key_0.pem
+      --cluster-cert=foxmq.d/key_0.crt
+      --cluster-root-cert=foxmq.d/ca.crt
+      --cluster-accept-peer-with-cert
+      --server-name broker1.example.com
+      /home/message-queue/foxmq.d
+
+  broker2:
+    container_name: broker2
+    depends_on:
+      # Ensure we start after `broker1` for proper IP address assignment
+      - broker1
+    image: message-queue-test
+    volumes:
+      - .:/home/message-queue/foxmq.d
+    ports:
+      - "1884:1883"
+    networks:
+      mesh-app-bridge:
+        aliases:
+          - broker2.example.com
+    environment: *broker_env
+    entrypoint: target/release/foxmq
+    command: >
+      run
+      --secret-key-file foxmq.d/key_1.pem
+      --cluster-cert=foxmq.d/key_1.crt
+      --cluster-root-cert=foxmq.d/ca.crt
+      --cluster-accept-peer-with-cert
+      --server-name broker2.example.com
+      /home/message-queue/foxmq.d
+
+  broker3:
+    container_name: broker3
+    depends_on:
+      # Ensure we start after `broker2` for proper IP address assignment
+      - broker2
+    image: message-queue-test
+    volumes:
+      - .:/home/message-queue/foxmq.d
+    ports:
+      - "1885:1883"
+    networks:
+      mesh-app-bridge:
+        aliases:
+          - broker3.example.com
+    environment: *broker_env
+    entrypoint: target/release/foxmq
+    command: >
+      run
+      --secret-key-file foxmq.d/key_2.pem
+      --cluster-cert=foxmq.d/key_2.crt
+      --cluster-root-cert=foxmq.d/ca.crt
+      --cluster-accept-peer-with-cert
+      --server-name broker2.example.com
+      /home/message-queue/foxmq.d
+
+  broker4:
+    container_name: broker4
+    depends_on:
+      # Ensure we start after `broker3` for proper IP address assignment\
+      - broker3
+    image: message-queue-test
+    volumes:
+      - .:/home/message-queue/foxmq.d
+    ports:
+      - "1886:1883"
+    networks:
+      mesh-app-bridge:
+        aliases:
+          - broker4.example.com
+    environment: *broker_env
+    entrypoint: target/release/foxmq
+    command: >
+      run
+      --websockets
+      --secret-key-file foxmq.d/key_3.pem
+      --cluster-cert=foxmq.d/key_3.crt
+      --cluster-root-cert=foxmq.d/ca.crt
+      --cluster-accept-peer-with-cert
+      --server-name broker4.example.com
+      /home/message-queue/foxmq.d
+
+networks:
+  mesh-app-bridge:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        # Explicitly specify a subnet to use so we can reference it in the address book.
+        - subnet: "172.16.238.0/24"

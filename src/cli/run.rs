@@ -1,6 +1,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tashi_collections::HashMap;
 
 use crate::cli::LogFormat;
 use crate::config;
@@ -158,6 +159,7 @@ struct TceConfig {
     config: tashi_consensus_engine::Config,
     roots: Option<Arc<RootCertificates>>,
     add_nodes: mpsc::UnboundedReceiver<AddNodeTransaction>,
+    joining_running_session: bool,
 }
 
 impl SecretKeyOpt {
@@ -276,7 +278,7 @@ async fn main_async(
             let (platform, messages) = Platform::start(
                 tce_config.config,
                 QuicSocket::bind_udp(args.cluster_addr).await?,
-                false,
+                tce_config.joining_running_session,
             )?;
 
             Some(TceState {
@@ -331,11 +333,14 @@ fn create_tce_config(
     addresses: &Addresses,
     config: &ClusterConfig,
 ) -> crate::Result<TceConfig> {
-    let nodes = addresses
+    let nodes: HashMap<_, _> = addresses
         .addresses
         .iter()
         .map(|address| (address.key.clone(), address.addr))
         .collect();
+    
+    // The address book is only required to contain the existing nodes.
+    let joining_running_session = !nodes.contains_key(&secret_key.public_key());
 
     let mut tce_config = tashi_consensus_engine::Config::new(secret_key)
         .initial_nodes(nodes)
@@ -380,6 +385,7 @@ fn create_tce_config(
         config: tce_config,
         roots,
         add_nodes: add_nodes_rx,
+        joining_running_session
     })
 }
 

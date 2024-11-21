@@ -897,7 +897,7 @@ fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_c
     };
 
     if let Err(e) = roots.verify_chain(&add_node.certs) {
-        tracing::info!("rejecting AddNode with invalid TLS roots: {e:?}");
+        tracing::debug!("rejecting AddNode with invalid TLS roots: {e:?}");
         return;
     }
 
@@ -906,7 +906,7 @@ fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_c
 
     if !from_consensus {
         let platform = tce.platform.clone();
-        
+
         // If the TCE queue is full, don't block the router task.
         //
         // FIXME: this is technically unbounded so an attacker could theoretically DoS us
@@ -914,10 +914,7 @@ fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_c
         // which means they *should* be a trustworthy peer to begin with.
         tokio::spawn(
             async move {
-                let permit = platform
-                    .reserve_tx()
-                    .await
-                    .wrap_err("TCE shutting down")?;
+                let permit = platform.reserve_tx().await.wrap_err("TCE shutting down")?;
 
                 let transaction = Transaction {
                     data: TransactionData::AddNode(add_node),
@@ -934,9 +931,11 @@ fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_c
         );
     }
 
-    if let Err(_) = tce
+    tracing::info!("voting to add node");
+    
+    if tce
         .platform
-        .vote_add_node(key, addr, Duration::from_secs(60))
+        .vote_add_node(key, addr, Duration::from_secs(60)).is_err()
     {
         tracing::debug!("TCE shutting down");
     }
