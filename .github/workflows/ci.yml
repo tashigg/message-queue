@@ -121,7 +121,7 @@ jobs:
           ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
 
       - name: Build and run the message queue brokers
-        run: ./run.sh
+        run: docker compose up --build -d
 
       # actions/setup-node@v4 doesn't seem to work, I didn't investigate.
       - name: Install Node and NPM
@@ -152,6 +152,22 @@ jobs:
 
       - name: Stop the message queue
         if: ${{ always() }}
+        run: docker compose stop
+
+      - name: Run TLS Root Certificates configuration
+        working-directory: foxmq-root-ca.d
+        run: docker compose up --build -d
+
+      - name: Run TLS Root Certificates test
+        run: npm test root-ca
+
+      - name: Get Service Logs
+        if: ${{ failure () }}
+        run: docker compose logs
+
+      - name: Stop the message queue
+        if: ${{ always() }}
+        working-directory: foxmq-root-ca.d
         run: docker compose stop
 
   tmq-build-macos:

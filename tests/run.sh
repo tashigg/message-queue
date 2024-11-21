@@ -20,5 +20,5 @@ if [[ ! $CI ]]; then
     nvm install
     nvm use
     npm i
-    npm test
+    npm test distribution
 fi
