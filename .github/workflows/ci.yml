@@ -137,7 +137,7 @@ jobs:
           . ~/.nvm/nvm.sh
           nvm use ${NODE_VERSION}
           npm i
-          npm test
+          npm test distribution
 
       - name: Get Service Logs
         if: ${{ failure () }}
