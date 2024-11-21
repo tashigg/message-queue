@@ -159,7 +159,9 @@ jobs:
         run: docker compose up --build -d
 
       - name: Run TLS Root Certificates test
-        run: npm test root-ca
+        run: |
+          . ~/.nvm/nvm.sh
+          npm test root-ca
 
       - name: Get Service Logs
         if: ${{ failure () }}
