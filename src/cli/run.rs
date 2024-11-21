@@ -338,7 +338,7 @@ fn create_tce_config(
         .iter()
         .map(|address| (address.key.clone(), address.addr))
         .collect();
-    
+
     // The address book is only required to contain the existing nodes.
     let joining_running_session = !nodes.contains_key(&secret_key.public_key());
 
@@ -385,7 +385,7 @@ fn create_tce_config(
         config: tce_config,
         roots,
         add_nodes: add_nodes_rx,
-        joining_running_session
+        joining_running_session,
     })
 }
 

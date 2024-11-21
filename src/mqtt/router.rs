@@ -932,10 +932,11 @@ fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_c
     }
 
     tracing::info!("voting to add node");
-    
+
     if tce
         .platform
-        .vote_add_node(key, addr, Duration::from_secs(60)).is_err()
+        .vote_add_node(key, addr, Duration::from_secs(60))
+        .is_err()
     {
         tracing::debug!("TCE shutting down");
     }
