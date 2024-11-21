@@ -105,7 +105,6 @@ jobs:
     runs-on: tashi-arc-dind
     env:
       NODE_VERSION: v20.11.0
-      SSH_AUTH_SOCK: $SSH_AUTH_SOCK
     defaults:
       run:
         working-directory: tests
@@ -117,8 +116,9 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          ssh-agent -a ${SSH_AUTH_SOCK}
+          eval $(ssh-agent -s)
           ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
 
       - name: Build and run the message queue brokers
         run: docker compose up --build -d
