@@ -6,7 +6,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnnf3kpf1JJ4ypYfOCajttq/K/LR1
 WlusJ7yZyT9eM9iSjtYfz5qx7DB2jpQOfbUgGI5AYHLLFbhdAUZNh9kayQ==
 -----END PUBLIC KEY-----
 """
-addr = "172.16.238.2:19793"
+addr = "172.16.239.2:19793"
 
 # key_1.pem
 [[addresses]]
@@ -16,7 +16,7 @@ MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9menwylnYjxmveG6FSEY76OeSKwt
 AoCZVb3Mrwe95SF86tm8WH3joe3+y1pNAVV006Osmn3Sl5/OaES/sof9ww==
 -----END PUBLIC KEY-----
 """
-addr = "172.16.238.3:19793"
+addr = "172.16.239.3:19793"
 
 ## The following nodes will join dynamically using certificate authentication.
 
@@ -28,7 +28,7 @@ addr = "172.16.238.3:19793"
 #DbVWaWaEybkjv/+hjfrg+aw5Z6M6i/LqSzRmRV/zzrhUxiftPtyV4uyJAA==
 #-----END PUBLIC KEY-----
 #"""
-#addr = "172.16.238.4:19793"
+#addr = "172.16.239.4:19793"
 
 # key_3.pem
 #[[addresses]]
@@ -38,4 +38,4 @@ addr = "172.16.238.3:19793"
 #bo6XEnUtocyE5Mi/6tEoWsjASXnsncaWhMe3TIp6aWxTmxpjne5nyRxTXw==
 #-----END PUBLIC KEY-----
 #"""
-#addr = "172.16.238.5:19793"
+#addr = "172.16.239.5:19793"
