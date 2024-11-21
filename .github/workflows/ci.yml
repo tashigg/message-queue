@@ -152,7 +152,7 @@ jobs:
 
       - name: Stop the message queue
         if: ${{ always() }}
-        run: docker compose stop
+        run: docker compose down
 
       - name: Run TLS Root Certificates configuration
         working-directory: tests/foxmq-root-ca.d
@@ -169,7 +169,7 @@ jobs:
       - name: Stop the message queue
         if: ${{ always() }}
         working-directory: tests/foxmq-root-ca.d
-        run: docker compose stop
+        run: docker compose down
 
   tmq-build-macos:
     name: Release Build - macOS
