@@ -391,8 +391,7 @@ pub fn txn_to_packet(
                 topic_alias: None,
                 response_topic: clone_prop!(response_topic),
                 correlation_data: clone_prop!(correlation_data).map(|bytes| bytes.0),
-                user_properties: clone_prop!(user_properties)
-                    .map_or(vec![], |props: UserProperties| props.0),
+                user_properties,
 
                 // TODO: now that `rumqttd-protocol` is in-tree, just change the type there
                 subscription_identifiers: sub_ids.iter().copied().map(Into::into).collect(),
