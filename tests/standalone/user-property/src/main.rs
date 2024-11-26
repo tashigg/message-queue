@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if let Some(properties) = publish.properties {
                 for prop in properties.user_properties {
-                    print!("{:#?}", prop);
+                    println!("{:#?}", prop);
                 }
             }
         }

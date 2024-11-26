@@ -837,20 +837,11 @@ impl<S: MqttSocket> Connection<S> {
             has_valid_filters = true;
         }
 
-        // find the first *valid* `include_broker_timestamps` field.
-        let include_broker_timestamps = sub_props
-            .as_ref()
-            .map(|it| it.user_properties.as_slice())
-            .iter()
-            .copied()
-            .flatten()
-            .flat_map(|(k, v)| {
-                v.parse::<bool>()
-                    .ok()
-                    .filter(|_| k == "include_broker_timestamps")
+        let include_broker_timestamps = sub_props.as_ref().is_some_and(|props| {
+            props.user_properties.iter().any(|(k, v)| {
+                k == "include_broker_timestamps" && v.parse::<bool>().unwrap_or(false)
             })
-            .next()
-            .unwrap_or(false);
+        });
 
         if has_valid_filters {
             self.incoming_packets
