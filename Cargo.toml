@@ -47,10 +47,16 @@ slotmap = "1.0.7"
 arbitrary = { version = "1", optional = true, features = ["derive"] }
 time = { version = "0.3.36", features = ["formatting"] }
 
+rustls-pemfile = "2.2.0"
+
 [dependencies.clap]
 version = "4.5.0"
 features = ["derive", "env"]
 
+[dependencies.tokio-rustls]
+version = "0.26.0"
+default-features = false
+features = ["ring", "tls12"]
 
 [dependencies.tracing-subscriber]
 version = "0.3.18"
