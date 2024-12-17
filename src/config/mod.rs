@@ -3,8 +3,8 @@ use serde::de::DeserializeOwned;
 use std::path::Path;
 use std::{fs, io};
 
+pub mod acl;
 pub mod addresses;
-
 pub mod users;
 
 fn read_toml<T: DeserializeOwned>(name: &str, path: &Path) -> crate::Result<T> {

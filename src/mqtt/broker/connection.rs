@@ -461,6 +461,8 @@ impl<S: MqttSocket> Connection<S> {
 
         self.protocol = protocol;
 
+        let mut user = "".to_string();
+
         if connect_props.as_ref().is_some_and(|props| {
             props.authentication_method.is_some() || props.authentication_data.is_some()
         }) {
@@ -487,17 +489,16 @@ impl<S: MqttSocket> Connection<S> {
         };
 
         if let Some(login) = login {
-            let Some(user) = self.shared.users.by_username.get(&login.username) else {
+            let Some(logged_user) = self.shared.users.by_username.get(&login.username) else {
                 self.disconnect_on_connect_error(ConnectReturnCode::NotAuthorized, "unknown user")
                     .await?;
-
                 return Ok(None);
             };
 
             let verified = self
                 .shared
                 .password_hasher
-                .verify(login.password.as_bytes(), &user.password_hash)
+                .verify(login.password.as_bytes(), &logged_user.password_hash)
                 .await?;
 
             if !verified {
@@ -509,6 +510,8 @@ impl<S: MqttSocket> Connection<S> {
 
                 return Ok(None);
             }
+
+            user = login.username;
         } else if !self.shared.users.auth.allow_anonymous_login {
             self.disconnect_on_connect_error(
                 ConnectReturnCode::NotAuthorized,
@@ -592,6 +595,7 @@ impl<S: MqttSocket> Connection<S> {
                 self.id,
                 response.client_index,
                 client_id,
+                user,
                 store.mailbox.sender(),
                 clean_session,
             )

@@ -21,6 +21,7 @@ use connection::Connection;
 use rumqttd_protocol::QoS;
 
 use crate::cli::run::WsConfig;
+use crate::config::acl::AclConfig;
 use crate::config::users::UsersConfig;
 use crate::mqtt::broker::socket::{DirectSocket, MqttSocket};
 use crate::mqtt::broker::tls::TlsAcceptor;
@@ -176,6 +177,7 @@ impl MqttBroker {
         tls_config: Option<TlsConfig>,
         ws_config: Option<WsConfig>,
         users: UsersConfig,
+        acl_config: AclConfig,
         tce: Option<TceState>,
         max_keep_alive: KeepAlive,
     ) -> crate::Result<Self> {
@@ -207,7 +209,7 @@ impl MqttBroker {
 
         let tce_platform = tce.as_ref().map(|tce| tce.platform.clone());
 
-        let router = MqttRouter::start(tce, token.clone());
+        let router = MqttRouter::start(tce, token.clone(), acl_config);
 
         Ok(MqttBroker {
             listen_addr,

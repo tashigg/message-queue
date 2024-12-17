@@ -5,6 +5,7 @@ use tashi_collections::HashMap;
 
 use crate::cli::LogFormat;
 use crate::config;
+use crate::config::acl::AclConfig;
 use crate::config::addresses::Addresses;
 use crate::config::users::{AuthConfig, UsersConfig};
 use crate::mqtt::broker::{self, MqttBroker};
@@ -181,6 +182,7 @@ impl SecretKeyOpt {
 
 pub fn main(args: RunArgs) -> crate::Result<()> {
     let mut users = config::users::read(&args.config_dir.join("users.toml"))?;
+    let acl = config::acl::read(&args.config_dir.join("acl.toml"))?;
 
     // Merge any auth overrides from the command-line.
     users.auth.merge(&args.auth_config);
@@ -261,7 +263,7 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
 
     let ws_config = args.ws_config.websockets.then(|| args.ws_config.clone());
 
-    main_async(args, users, tce_config, tls_config, ws_config)
+    main_async(args, users, acl, tce_config, tls_config, ws_config)
 }
 
 // `#[tokio::main]` doesn't have to be attached to the actual `main()`, and it can accept args
@@ -269,6 +271,7 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
 async fn main_async(
     args: RunArgs,
     users: UsersConfig,
+    acl_config: AclConfig,
     tce_config: Option<TceConfig>,
     tls_config: Option<broker::TlsConfig>,
     ws_config: Option<WsConfig>,
@@ -298,6 +301,7 @@ async fn main_async(
         tls_config,
         ws_config,
         users,
+        acl_config,
         tce,
         KeepAlive::from_seconds(args.max_keep_alive),
     )
