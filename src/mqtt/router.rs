@@ -2,7 +2,6 @@ use std::cmp;
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::{Index, IndexMut};
-use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -707,7 +706,7 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
                 .and_then(|(filter, props)| {
                     if !state.acl.check_acl_config(
                         permissions,
-                        &filter,
+                        filter.as_str(),
                         crate::config::acl::TransactionType::Subscribe,
                     ) {
                         Err(SubscribeReasonCode::NotAuthorized)?
@@ -1010,13 +1009,11 @@ fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: Pu
             return;
         };
 
-        let topic_filter = Filter::from(&topic);
-
         let topics_config = state.acl.get_topics_acl_config(&client.user);
 
         if !state.acl.check_acl_config(
             topics_config,
-            &topic_filter,
+            &publish.topic,
             crate::config::acl::TransactionType::Publish,
         ) {
             return;

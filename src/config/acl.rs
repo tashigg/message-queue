@@ -1,27 +1,40 @@
-use std::path::Path;
+use std::{path::Path, str::FromStr};
 
 use tashi_collections::HashMap;
 
-use crate::mqtt::trie::Filter;
+use crate::mqtt::trie::{Filter, TopicName};
 
-#[derive(serde::Deserialize, serde::Serialize, Default)]
+#[derive(serde::Deserialize, Default)]
 pub struct AclConfig {
+    #[serde(default)]
     pub permissions: HashMap<String, TopicsConfig>,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct TopicsConfig {
     pub topic: Vec<TopicPermissions>,
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct TopicPermissions {
-    pub filter: String,
+    #[serde(deserialize_with = "from_str")]
+    pub filter: Filter,
     pub allowed: Vec<TransactionType>,
+    #[serde(default)]
     pub denied: Vec<TransactionType>,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+fn from_str<'de, D>(deserializer: D) -> Result<Filter, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s: String = serde::Deserialize::deserialize(deserializer)?;
+
+    Filter::from_str(&s).map_err(serde::de::Error::custom)
+}
+
+#[derive(serde::Deserialize, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
 pub enum TransactionType {
     Subscribe,
     Publish,
@@ -38,13 +51,14 @@ impl AclConfig {
     pub fn check_acl_config(
         &self,
         topics_config: Option<&TopicsConfig>,
-        filter: &Filter,
+        topic_name: &str,
         transaction_type: TransactionType,
     ) -> bool {
         // Allows everything if no topics config was found.
         topics_config.map_or(true, |perms| {
-            !perms.topic.iter().any(|k| {
-                k.allowed.iter().any(|k| *k == transaction_type) && filter.matches_topic(&k.filter)
+            perms.topic.iter().any(|k| {
+                k.allowed.iter().any(|k| *k == transaction_type)
+                    && k.filter.matches_topic(topic_name)
             })
         })
     }

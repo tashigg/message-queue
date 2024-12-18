@@ -6,3 +6,4 @@ foxmq.d/
 
 # These are test keys and must not be used anywhere else.
 !/tests/dmq
+.env
