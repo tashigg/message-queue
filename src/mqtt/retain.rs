@@ -1,5 +1,5 @@
 use crate::mqtt::trie::Filter;
-use crate::tce_message::PublishTrasaction;
+use crate::transaction::PublishTrasaction;
 use bytes::{Buf, BufMut, BytesMut};
 use color_eyre::eyre;
 use color_eyre::eyre::{ContextCompat, WrapErr};
@@ -259,7 +259,7 @@ fn read_message(buf: &mut &[u8]) -> crate::Result<Message> {
 #[cfg(test)]
 mod tests {
     use super::RetainedMessages;
-    use crate::tce_message::{
+    use crate::transaction::{
         BytesAsOctetString, PublishMeta, PublishTrasaction, TimestampSeconds,
     };
     use bytes::BytesMut;

@@ -18,7 +18,7 @@ features = ["arbitrary"]
 path = ".."
 
 [dependencies.quinn-proto]
-version = "0.10"
+version = "0.11.9"
 features = ["arbitrary"]
 
 [[bin]]

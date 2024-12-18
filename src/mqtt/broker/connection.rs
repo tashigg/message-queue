@@ -36,7 +36,7 @@ use crate::mqtt::session::{Session, SessionStore};
 use crate::mqtt::trie::Filter;
 use crate::mqtt::KeepAlive;
 use crate::mqtt::{client_id, connect, publish, ClientId, ClientIndex, ConnectionId, DynProtocol};
-use crate::tce_message::{PublishMeta, Transaction, TransactionData};
+use crate::transaction::{PublishMeta, Transaction, TransactionData};
 
 // TODO: make this configurable
 /// Default value for the Receive Maximum we send to the client,

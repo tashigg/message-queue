@@ -18,11 +18,11 @@ default-run = "foxmq"
 
 [dependencies.tashi-consensus-engine]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "7378c531021a72f67e369c18cbcbe16af5c63ea9"
+rev = "493410f6ea9b4fcd94b444ac3cebb6c5f12b4d02"
 
 [dependencies.tashi-collections]
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "7378c531021a72f67e369c18cbcbe16af5c63ea9"
+rev = "493410f6ea9b4fcd94b444ac3cebb6c5f12b4d02"
 
 [dependencies]
 argon2 = { version = "0.5.3", features = ["std"] }
@@ -45,15 +45,18 @@ der = { version = "0.7.9", features = ["derive"] }
 futures = { version = "0.3.30", features = ["std", "alloc"] }
 slotmap = "1.0.7"
 arbitrary = { version = "1", optional = true, features = ["derive"] }
-# TODO: upgrade RusTLS in TCE and message-queue [TG-461]
-tokio-rustls = "0.24.1"
-rustls-pemfile = "1.0.4"
 time = { version = "0.3.36", features = ["formatting"] }
+
+rustls-pemfile = "2.2.0"
 
 [dependencies.clap]
 version = "4.5.0"
 features = ["derive", "env"]
 
+[dependencies.tokio-rustls]
+version = "0.26.0"
+default-features = false
+features = ["ring", "tls12"]
 
 [dependencies.tracing-subscriber]
 version = "0.3.18"

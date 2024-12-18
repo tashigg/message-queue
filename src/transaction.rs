@@ -4,8 +4,9 @@ use std::time::SystemTime;
 use bytes::Bytes;
 use der::asn1::{BitStringRef, OctetString, OctetStringRef, Utf8StringRef};
 use der::{Decode, Encode, Header, Length, Reader, Tag, TagNumber, Writer};
-
 use rumqttd_protocol::QoS;
+use tashi_consensus_engine::protocol::Endpoint;
+use tashi_consensus_engine::{Certificate, PublicKey};
 
 #[derive(der::Sequence, Debug)]
 pub struct Transaction {
@@ -17,6 +18,8 @@ pub struct Transaction {
 pub enum TransactionData {
     #[asn1(context_specific = "2", constructed = "true")]
     Publish(PublishTrasaction),
+    #[asn1(context_specific = "3", constructed = "true")]
+    AddNode(AddNodeTransaction),
 }
 
 // Transcoding to DER was chosen so that we are not baking-in a specific version of the MQTT protocol.
@@ -72,6 +75,13 @@ pub struct PublishTransactionProperties {
     // Specified as 38 (0x26) but context_specific tags don't go that high
     #[asn1(context_specific = "30", optional = "true")]
     pub user_properties: Option<UserProperties>,
+}
+
+#[derive(der::Sequence, Debug, PartialEq, Eq)]
+pub struct AddNodeTransaction {
+    pub socket_addr: Endpoint,
+    pub key: PublicKey,
+    pub certs: Vec<Certificate>,
 }
 
 impl TryFrom<Transaction> for tashi_consensus_engine::ApplicationTransaction {
@@ -427,7 +437,7 @@ fn encoded_pair_len(key: &str, val: &str) -> der::Result<Length> {
 mod tests {
     use der::{Decode, Encode};
 
-    use crate::tce_message::{PublishMeta, QoS, UserProperties};
+    use crate::transaction::{PublishMeta, QoS, UserProperties};
 
     #[test]
     fn publish_meta() {

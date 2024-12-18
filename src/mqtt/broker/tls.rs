@@ -22,7 +22,6 @@ impl TlsAcceptor {
         let listen_addr = config.socket_addr;
         let acceptor = {
             let config = tokio_rustls::rustls::ServerConfig::builder()
-                .with_safe_defaults()
                 .with_no_client_auth()
                 .with_single_cert(config.cert_chain, config.key)?;
 

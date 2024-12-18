@@ -105,7 +105,6 @@ jobs:
     runs-on: tashi-arc-dind
     env:
       NODE_VERSION: v20.11.0
-      SSH_AUTH_SOCK: $SSH_AUTH_SOCK
     defaults:
       run:
         working-directory: tests
@@ -117,11 +116,12 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          ssh-agent -a ${SSH_AUTH_SOCK}
+          eval $(ssh-agent -s)
           ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
 
       - name: Build and run the message queue brokers
-        run: ./run.sh
+        run: docker compose up --build -d
 
       # actions/setup-node@v4 doesn't seem to work, I didn't investigate.
       - name: Install Node and NPM
@@ -137,7 +137,7 @@ jobs:
           . ~/.nvm/nvm.sh
           nvm use ${NODE_VERSION}
           npm i
-          npm test
+          npm test distribution
 
       - name: Get Service Logs
         if: ${{ failure () }}
@@ -152,7 +152,26 @@ jobs:
 
       - name: Stop the message queue
         if: ${{ always() }}
-        run: docker compose stop
+        run: docker compose down
+
+      - name: Run TLS Root Certificates configuration
+        working-directory: tests/foxmq-root-ca.d
+        run: docker compose up --build -d
+
+      - name: Run TLS Root Certificates test
+        run: |
+          . ~/.nvm/nvm.sh
+          npm test root-ca
+
+      - name: Get Service Logs
+        if: ${{ failure () }}
+        working-directory: tests/foxmq-root-ca.d
+        run: docker compose logs
+
+      - name: Stop the message queue
+        if: ${{ always() }}
+        working-directory: tests/foxmq-root-ca.d
+        run: docker compose down
 
   tmq-build-macos:
     name: Release Build - macOS

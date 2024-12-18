@@ -15,7 +15,7 @@ pub mod mqtt;
 
 pub mod password;
 
-pub mod tce_message;
+pub mod transaction;
 
 pub fn bootstrap(log_format: LogFormat) -> Result<()> {
     if let Err(e) = dotenvy::dotenv() {

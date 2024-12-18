@@ -65,4 +65,5 @@ networks:
       driver: default
       config:
         # Explicitly specify a subnet to use so we can reference it in the address book.
+        # The 172.16.0.0–172.31.255.255 block is reserved for private networks.
         - subnet: "172.16.238.0/24"

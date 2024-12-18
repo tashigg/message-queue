@@ -1,0 +1,41 @@
+# key_0.pem
+[[addresses]]
+key = """
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnnf3kpf1JJ4ypYfOCajttq/K/LR1
+WlusJ7yZyT9eM9iSjtYfz5qx7DB2jpQOfbUgGI5AYHLLFbhdAUZNh9kayQ==
+-----END PUBLIC KEY-----
+"""
+addr = "172.16.239.2:19793"
+
+# key_1.pem
+[[addresses]]
+key = """
+-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE9menwylnYjxmveG6FSEY76OeSKwt
+AoCZVb3Mrwe95SF86tm8WH3joe3+y1pNAVV006Osmn3Sl5/OaES/sof9ww==
+-----END PUBLIC KEY-----
+"""
+addr = "172.16.239.3:19793"
+
+## The following nodes will join dynamically using certificate authentication.
+
+# key_2.pem
+#[[addresses]]
+#key = """
+#-----BEGIN PUBLIC KEY-----
+#MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEyNJugPLyF3c4akZyxiOMTcdBX1wJ
+#DbVWaWaEybkjv/+hjfrg+aw5Z6M6i/LqSzRmRV/zzrhUxiftPtyV4uyJAA==
+#-----END PUBLIC KEY-----
+#"""
+#addr = "172.16.239.4:19793"
+
+# key_3.pem
+#[[addresses]]
+#key = """
+#-----BEGIN PUBLIC KEY-----
+#MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEOMEQMpHG1Unnisi/YWx3V17/Faqn
+#bo6XEnUtocyE5Mi/6tEoWsjASXnsncaWhMe3TIp6aWxTmxpjne5nyRxTXw==
+#-----END PUBLIC KEY-----
+#"""
+#addr = "172.16.239.5:19793"

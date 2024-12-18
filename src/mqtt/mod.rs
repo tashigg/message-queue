@@ -11,6 +11,8 @@ pub use keep_alive::KeepAlive;
 pub use rumqttd_protocol as protocol;
 use rumqttd_protocol::{Packet, Protocol};
 
+pub use router::TceState;
+
 pub mod broker;
 pub mod client_id;
 

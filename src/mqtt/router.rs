@@ -3,21 +3,23 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::{Index, IndexMut};
 use std::sync::{Arc, OnceLock};
-use std::time::{Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use bytes::Bytes;
 use color_eyre::eyre::WrapErr;
 use color_eyre::eyre::{self};
-use der::Decode;
+use der::{Decode, Encode};
 use slotmap::SecondaryMap;
 use tashi_collections::{HashMap, HashSet};
-use tashi_consensus_engine::{CreatorId, Message, MessageStream, Platform, PlatformEvent};
+use tashi_consensus_engine::{
+    CreatorId, Message, MessageStream, Platform, PlatformEvent, RootCertificates,
+};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;
 use tokio::task;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::Span;
+use tracing::{Instrument, Span};
 
 use rumqttd_protocol::{QoS, RetainForwardRule, SubscribeReasonCode, UnsubAckReason};
 
@@ -27,9 +29,9 @@ use crate::mqtt::packets::PacketId;
 use crate::mqtt::retain::RetainedMessages;
 use crate::mqtt::trie::{self, Filter, FilterTrie, TopicName};
 use crate::mqtt::{ClientId, ClientIndex, ConnectionId};
-use crate::tce_message::{
-    BytesAsOctetString, PublishMeta, PublishTrasaction, TimestampSeconds, Transaction,
-    TransactionData,
+use crate::transaction::{
+    AddNodeTransaction, BytesAsOctetString, PublishMeta, PublishTrasaction, TimestampSeconds,
+    Transaction, TransactionData,
 };
 
 // Tokio's channels allocate in slabs of 32.
@@ -67,12 +69,15 @@ pub struct FilterProperties {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SubscriptionId(NonZeroU32);
 
+pub struct TceState {
+    pub platform: Arc<Platform>,
+    pub messages: MessageStream,
+    pub roots: Option<Arc<RootCertificates>>,
+    pub add_nodes: mpsc::UnboundedReceiver<AddNodeTransaction>,
+}
+
 impl MqttRouter {
-    pub fn start(
-        tce_platform: Option<Arc<Platform>>,
-        tce_messages: Option<MessageStream>,
-        token: CancellationToken,
-    ) -> Self {
+    pub fn start(tce: Option<TceState>, token: CancellationToken) -> Self {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
 
         let (system_tx, system_rx) = mpsc::unbounded_channel();
@@ -80,13 +85,6 @@ impl MqttRouter {
         SYSTEM_TX
             .set(system_tx.clone())
             .expect("BUG: MqttRouter initialized more than once!");
-
-        let tce = tce_messages
-            .zip(tce_platform)
-            .map(|(tce_messages, tce_platform)| Tce {
-                tce_messages,
-                tce_platform,
-            });
 
         let state = RouterState {
             token,
@@ -346,12 +344,7 @@ struct RouterState {
 
     startup_instant: Instant,
 
-    tce: Option<Tce>,
-}
-
-struct Tce {
-    tce_platform: Arc<Platform>,
-    tce_messages: MessageStream,
+    tce: Option<TceState>,
 }
 
 /// State associated with a given client ID (i.e. session state).
@@ -515,6 +508,7 @@ impl ClientState {
 struct InvalidSubscriptionKind;
 
 use futures::future::OptionFuture;
+use futures::TryFutureExt;
 
 // Experimenting with using free functions instead of methods for less right-drift in core logic.
 // Methods should be added to `RouterState` or its constituent types
@@ -522,8 +516,13 @@ use futures::future::OptionFuture;
 #[tracing::instrument(name = "router", skip(state))]
 async fn run(mut state: RouterState) -> crate::Result<()> {
     loop {
-        let tce_msgs_fut =
-            OptionFuture::from(state.tce.as_mut().map(|k| k.tce_messages.next_message()));
+        let mut tce_msgs_fut = OptionFuture::from(None);
+        let mut add_nodes = OptionFuture::from(None);
+
+        if let Some(tce) = &mut state.tce {
+            tce_msgs_fut = Some(tce.messages.next_message()).into();
+            add_nodes = Some(tce.add_nodes.recv()).into();
+        }
 
         tokio::select! {
             msg = state.command_rx.recv() => {
@@ -547,6 +546,9 @@ async fn run(mut state: RouterState) -> crate::Result<()> {
                     };
                     handle_message(&mut state, msg)
             }
+            Some(Some(add_node)) = add_nodes => {
+                handle_add_node(&mut state, add_node, false);
+            },
             _ = state.token.cancelled() => {
                 break;
             }
@@ -604,6 +606,10 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
         RouterCommand::Transaction(txn) => match txn.data {
             TransactionData::Publish(publish) => {
                 dispatch(state, publish.into(), PublishOrigin::Local(client_idx))
+            }
+            TransactionData::AddNode(add_node) => {
+                // This really shouldn't be called from here, but there's little harm in doing it.
+                handle_add_node(state, add_node, false);
             }
         },
         RouterCommand::Subscribe(request) => handle_subscribe(state, client_idx, request),
@@ -766,7 +772,7 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
 
 fn handle_message(state: &mut RouterState, message: Message) {
     if let Some(tce) = state.tce.as_ref() {
-        let tce_platform = tce.tce_platform.clone();
+        let tce_platform = tce.platform.clone();
         match message {
             Message::SyncPoint(sync_point) => {
                 // TODO: handle sync points
@@ -798,10 +804,17 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Pl
     // and re-send them if not.
 
     for (idx, transaction) in event.application_transactions().iter().enumerate() {
-        match Transaction::from_der(transaction.as_bytes()) {
-            Ok(Transaction {
-                data: TransactionData::Publish(publish),
-            }) => {
+        let transaction = match Transaction::from_der(transaction.as_bytes()) {
+            Ok(txn) => txn,
+            Err(e) => {
+                // This isn't a fatal error.
+                tracing::debug!(idx, "error decoding transaction from TCE: {e:?}");
+                continue;
+            }
+        };
+
+        match transaction.data {
+            TransactionData::Publish(publish) => {
                 let publish = Arc::new(publish);
 
                 if &event.creator != platform.creator_id() {
@@ -826,9 +839,8 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Pl
                     }
                 }
             }
-            Err(e) => {
-                // This isn't a fatal error.
-                tracing::debug!(idx, "error decoding transaction from TCE: {e:?}");
+            TransactionData::AddNode(add_node) => {
+                handle_add_node(state, add_node, true);
             }
         }
     }
@@ -869,6 +881,64 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
         SystemCommand::EvictClient { client_index } => {
             state.evict_client(client_index);
         }
+    }
+}
+
+#[tracing::instrument(skip_all, fields(key=%add_node.key, addr=%add_node.socket_addr.0, from_consensus))]
+fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_consensus: bool) {
+    let Some(tce) = &state.tce else {
+        tracing::warn!("BUG: received AddNode with no TCE instance configured");
+        return;
+    };
+
+    let Some(roots) = &tce.roots else {
+        tracing::debug!("rejecting AddNode with no TLS roots configured");
+        return;
+    };
+
+    if let Err(e) = roots.verify_chain(&add_node.certs) {
+        tracing::debug!("rejecting AddNode with invalid TLS roots: {e:?}");
+        return;
+    }
+
+    let key = add_node.key.clone();
+    let addr = add_node.socket_addr.0;
+
+    if !from_consensus {
+        let platform = tce.platform.clone();
+
+        // If the TCE queue is full, don't block the router task.
+        //
+        // FIXME: this is technically unbounded so an attacker could theoretically DoS us
+        // by repeatedly connecting with new keys, but they'd have to have a valid TLS root cert
+        // which means they *should* be a trustworthy peer to begin with.
+        tokio::spawn(
+            async move {
+                let permit = platform.reserve_tx().await.wrap_err("TCE shutting down")?;
+
+                let transaction = Transaction {
+                    data: TransactionData::AddNode(add_node),
+                }
+                .to_der()
+                .wrap_err("error encoding transaction")?;
+
+                permit.send(transaction.try_into().wrap_err("transaction too large")?);
+
+                eyre::Ok(())
+            }
+            .inspect_err(|e| tracing::warn!("error sending AddNodeTransaction to cluster: {e:?}"))
+            .instrument(tracing::debug_span!("send_txn")),
+        );
+    }
+
+    tracing::info!("voting to add node");
+
+    if tce
+        .platform
+        .vote_add_node(key, addr, Duration::from_secs(60))
+        .is_err()
+    {
+        tracing::debug!("TCE shutting down");
     }
 }
 
