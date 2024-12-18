@@ -172,6 +172,7 @@ pub struct TlsConfig {
 }
 
 impl MqttBroker {
+    #[allow(clippy::too_many_arguments)]
     pub async fn bind(
         listen_addr: SocketAddr,
         tls_config: Option<TlsConfig>,

@@ -2,7 +2,7 @@ use std::{path::Path, str::FromStr};
 
 use tashi_collections::HashMap;
 
-use crate::mqtt::trie::{Filter, TopicName};
+use crate::mqtt::trie::Filter;
 
 #[derive(serde::Deserialize, Default)]
 pub struct AclConfig {

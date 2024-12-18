@@ -113,7 +113,7 @@ describe("publish to node 1, receive from node2", () => {
     test("synchronously, over Websockets", async () => {
         // Test v4 (3.1.1) and v5 (5.0) simultaneously
         const client1 = await mqtt.connectAsync("ws://127.0.0.1:8080", { protocolVersion: 4 });
-        const client2 = await mqtt.connectAsync("ws://127.0.0.1:8081", {protocolVersion: 5});
+        const client2 = await mqtt.connectAsync("ws://127.0.0.1:8081", { protocolVersion: 5 });
 
         await client2.subscribeAsync("weather/los_angeles");
 
@@ -267,5 +267,24 @@ describe("publish to node 1, receive from node2", () => {
 
         await client1.endAsync();
         await client2.endAsync();
-    });
+    }),
+        test("ACL", async () => {
+            // Can publish to test_topic but not subscribe
+            const client1 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5, username: "test_user1", password: "1234" });
+            // Can subscribe to test_topic but not publish
+            const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5, username: "test_user2", password: "1234" });
+            // Can do anything anywhere
+            const client3 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
+
+            await client1.publishAsync("test_topic", "a test message");
+
+            await client2.subscribe("test_topic");
+
+            const [topic, message] = await events.once(client2, 'message');
+
+            expect(topic.toString()).toBe("test_topic");
+            expect(message.toString()).toBe("a test message");
+
+        })
+        ;
 });

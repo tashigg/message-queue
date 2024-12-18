@@ -1,2 +1,8 @@
 [auth]
 allow-anonymous-login = true
+
+[users.test_user1]
+password-hash = "$argon2id$v=19$m=19456,t=2,p=1$TwFLGuZeIBQGjn02H9NpJQ$8s2JrmbxhLfHphYEfmZ4KjJmxS7tTCss06E27kZC6M0"
+
+[users.test_user2]
+password-hash = "$argon2id$v=19$m=19456,t=2,p=1$TwFLGuZeIBQGjn02H9NpJQ$8s2JrmbxhLfHphYEfmZ4KjJmxS7tTCss06E27kZC6M0"
