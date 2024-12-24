@@ -6,6 +6,7 @@ const events = require("node:events");
 const timers = require("node:timers/promises");
 
 describe("publish to node 1, receive from node2", () => {
+
     test("synchronously", async () => {
         // Test v4 (3.1.1) and v5 (5.0) simultaneously
         const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 4 });
@@ -269,22 +270,98 @@ describe("publish to node 1, receive from node2", () => {
         await client2.endAsync();
     }),
         test("ACL", async () => {
+            async function waitForEventWithTimeout(emitter, eventName, timeoutMs) {
+                const timeout = new Promise((_, reject) =>
+                    setTimeout(() => reject(new Error(`Timeout waiting for ${eventName}`)), timeoutMs)
+                );
+
+                const eventPromise = events.once(emitter, eventName);
+
+                return Promise.race([eventPromise, timeout]);
+            }
+
+
             // Can publish to test_topic but not subscribe
-            const client1 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5, username: "test_user1", password: "1234" });
+            const client1 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5, username: "test_user1", password: "1234" });
             // Can subscribe to test_topic but not publish
-            const client2 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5, username: "test_user2", password: "1234" });
+            const client2 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5, username: "test_user2", password: "1234" });
             // Can do anything anywhere
-            const client3 = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
+            const client3 = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+
+
+            // Client 2 can sub and client 1 can publish
+            await client2.subscribeAsync("test_topic");
 
             await client1.publishAsync("test_topic", "a test message");
-
-            await client2.subscribe("test_topic");
 
             const [topic, message] = await events.once(client2, 'message');
 
             expect(topic.toString()).toBe("test_topic");
             expect(message.toString()).toBe("a test message");
 
+            // Client 2 cannot publish
+            await client2.publishAsync("test_topic", "a test message");
+
+            try {
+                await waitForEventWithTimeout(client2, 'message', 100);
+                throw new Error('Test failed: event was received unexpectedly');
+            } catch (err) {
+                expect(err.message).toBe('Timeout waiting for message');
+            }
+
+
+            // Client 1 cannot sub
+
+            await client1.subscribeAsync("test_topic");
+
+            await client1.publishAsync("test_topic", "a test message");
+
+            try {
+                await waitForEventWithTimeout(client1, 'message', 100);
+                throw new Error('Test failed: event was received unexpectedly');
+            } catch (err) {
+                expect(err.message).toBe('Timeout waiting for message');
+            }
+
+            // User 3 can do anything in any topic
+
+            await client3.subscribeAsync("test_topic");
+
+            await client3.publishAsync("test_topic", "a test message");
+
+            const [topic3, message3] = await events.once(client3, 'message');
+
+            expect(topic3.toString()).toBe("test_topic");
+            expect(message3.toString()).toBe("a test message");
+
+
+            // Client 1 can do whatever in other topics.
+
+            await client1.subscribeAsync("test_topic1");
+
+            await client1.publishAsync("test_topic1", "a test message");
+
+            const [topic_any_1, message_any_1] = await events.once(client1, 'message');
+
+            expect(topic_any_1.toString()).toBe("test_topic1");
+            expect(message_any_1.toString()).toBe("a test message");
+
+
+            // Client 2 can do whatever in other topics.
+
+            await client2.subscribeAsync("test_topic1");
+
+            await client2.publishAsync("test_topic1", "a test message");
+
+            const [topic_any_2, message_any_2] = await events.once(client2, 'message');
+
+            expect(topic_any_2.toString()).toBe("test_topic1");
+            expect(message_any_2.toString()).toBe("a test message");
+
+
+            await client1.endAsync();
+            await client2.endAsync();
+            await client3.endAsync();
         })
         ;
 });

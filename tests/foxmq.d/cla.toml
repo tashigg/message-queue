@@ -1,6 +1,0 @@
-[permissions.test_user1]
-topic = [{ filter = "topic", allowed = ["publish"] }]
-
-
-[permissions.test_user2]
-topic = [{ filter = "topic", allowed = ["subscribe"] }]
