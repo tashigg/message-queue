@@ -24,7 +24,7 @@ on:
 jobs:
   tmq-format:
     name: Format
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     timeout-minutes: 10
     steps:
       - name: Check out
@@ -42,7 +42,7 @@ jobs:
 
   tmq-check:
     name: Check
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     timeout-minutes: 10
     steps:
       - name: Check out
@@ -73,7 +73,7 @@ jobs:
 
   tmq-tests-unit:
     name: Unit Tests
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     timeout-minutes: 10
     steps:
       - name: Check out
@@ -102,7 +102,7 @@ jobs:
   tmq-tests-e2e:
     name: End-to-End Tests
     timeout-minutes: 10
-    runs-on: tashi-arc-dind
+    runs-on: ghcr.io/cirruslabs/ubuntu-runner-amd64:22.04-md
     env:
       NODE_VERSION: v20.11.0
     defaults:
@@ -177,7 +177,7 @@ jobs:
     name: Release Build - macOS
     if: ${{ inputs.enable-macOS || inputs.release-version != '' }}
     needs: tmq-check
-    runs-on: macOS
+    runs-on: ghcr.io/cirruslabs/macos-runner:sonoma
     timeout-minutes: 30
     env:
       GIT_SSH_COMMAND: ssh -i .ssh/id_ed25519
@@ -201,9 +201,9 @@ jobs:
           key: macOS-build
 
       - name: Install/Update Rust
-        run: |
-          rustup update stable
-          rustup target add x86_64-apple-darwin
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: x86_64-apple-darwin
 
       - name: Build
         run: |
@@ -283,7 +283,7 @@ jobs:
     name: Release Build - Linux
     # This one doesn't cost us anything to run
     needs: tmq-check
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     timeout-minutes: 15
     steps:
       - name: Check out
@@ -320,7 +320,7 @@ jobs:
 
   tmq-draft-release:
     if: ${{ inputs.release-version != '' }}
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     needs:
       - tmq-build-macos
       - tmq-build-windows
@@ -425,12 +425,13 @@ jobs:
 
   tmq-docker-publish:
     if: ${{ inputs.release-version != '' }}
-    runs-on: tashi-arc-dind
+    # Just use CI minutes for this job since it's only run manually.
+    runs-on: ubuntu-latest
     # Just to make sure the rest of the release process went okay.
     needs: tmq-draft-release
     steps:
       - name: Log in to registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Fetch Linux Artifact
         uses: actions/download-artifact@v4

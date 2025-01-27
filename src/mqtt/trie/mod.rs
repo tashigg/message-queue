@@ -51,7 +51,7 @@ where
 
         // fixme: This iterator is very inefficient (O(n) scans per tree depth) but it probably doesn't matter because this is a Debug impl.
         // it's O(1) memory usage though.
-        impl<'a, T> Iterator for Iter<'a, T> {
+        impl<T> Iterator for Iter<'_, T> {
             type Item = NodeId;
 
             fn next(&mut self) -> Option<Self::Item> {
@@ -179,7 +179,7 @@ impl<T> FilterTrie<T> {
     pub fn contains_entry(&self, entry_id: EntryId) -> bool {
         self.nodes
             .get(entry_id.node_id)
-            .map_or(false, |it| it[entry_id.leaf_kind].is_some())
+            .is_some_and(|it| it[entry_id.leaf_kind].is_some())
     }
 
     fn lookup(&self, filter: &Filter) -> Option<EntryId> {
