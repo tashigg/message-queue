@@ -24,7 +24,7 @@ on:
 jobs:
   tmq-format:
     name: Format
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     timeout-minutes: 10
     steps:
       - name: Check out
@@ -42,7 +42,7 @@ jobs:
 
   tmq-check:
     name: Check
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     timeout-minutes: 10
     steps:
       - name: Check out
@@ -73,7 +73,7 @@ jobs:
 
   tmq-tests-unit:
     name: Unit Tests
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     timeout-minutes: 10
     steps:
       - name: Check out
@@ -283,7 +283,7 @@ jobs:
     name: Release Build - Linux
     # This one doesn't cost us anything to run
     needs: tmq-check
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     timeout-minutes: 15
     steps:
       - name: Check out
@@ -320,7 +320,7 @@ jobs:
 
   tmq-draft-release:
     if: ${{ inputs.release-version != '' }}
-    runs-on: tashi-arc
+    runs-on: tashi-actions-runner
     needs:
       - tmq-build-macos
       - tmq-build-windows
