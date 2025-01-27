@@ -102,7 +102,7 @@ jobs:
   tmq-tests-e2e:
     name: End-to-End Tests
     timeout-minutes: 10
-    runs-on: tashi-arc-dind
+    runs-on: ghcr.io/cirruslabs/ubuntu-runner-amd64:22.04-md
     env:
       NODE_VERSION: v20.11.0
     defaults:
