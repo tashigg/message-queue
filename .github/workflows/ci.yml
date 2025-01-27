@@ -177,7 +177,7 @@ jobs:
     name: Release Build - macOS
     if: ${{ inputs.enable-macOS || inputs.release-version != '' }}
     needs: tmq-check
-    runs-on: macOS
+    runs-on: ghcr.io/cirruslabs/macos-runner:sonoma
     timeout-minutes: 30
     env:
       GIT_SSH_COMMAND: ssh -i .ssh/id_ed25519
@@ -201,9 +201,9 @@ jobs:
           key: macOS-build
 
       - name: Install/Update Rust
-        run: |
-          rustup update stable
-          rustup target add x86_64-apple-darwin
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: x86_64-apple-darwin
 
       - name: Build
         run: |
