@@ -5,7 +5,7 @@ use tashi_collections::HashMap;
 use crate::mqtt::trie::Filter;
 
 #[derive(serde::Deserialize, Default)]
-pub struct AclConfig {
+pub struct PermissionsConfig {
     #[serde(default)]
     pub permissions: HashMap<String, TopicsConfig>,
 }
@@ -40,7 +40,7 @@ pub enum TransactionType {
     Publish,
 }
 
-impl AclConfig {
+impl PermissionsConfig {
     pub fn get_topics_acl_config(&self, user: &str) -> Option<&TopicsConfig> {
         match self.permissions.get(user) {
             Some(permission) => Some(permission),
@@ -68,13 +68,15 @@ impl AclConfig {
     }
 }
 
-pub fn read(path: &Path) -> crate::Result<AclConfig> {
-    Ok(super::read_toml_optional("acl", path)?.unwrap_or_else(|| {
-        tracing::debug!(
-            "acl file not found at {}; any user can do anything with the topics.",
-            path.display()
-        );
+pub fn read(path: &Path) -> crate::Result<PermissionsConfig> {
+    Ok(
+        super::read_toml_optional("permissions", path)?.unwrap_or_else(|| {
+            tracing::debug!(
+                "permissions file not found at {}; any user can do anything with the topics.",
+                path.display()
+            );
 
-        AclConfig::default()
-    }))
+            PermissionsConfig::default()
+        }),
+    )
 }

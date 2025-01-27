@@ -23,7 +23,7 @@ use tracing::{Instrument, Span};
 
 use rumqttd_protocol::{QoS, RetainForwardRule, SubscribeReasonCode, UnsubAckReason};
 
-use crate::config::acl::AclConfig;
+use crate::config::permissions::PermissionsConfig;
 use crate::map_join_error;
 use crate::mqtt::mailbox::MailSender;
 use crate::mqtt::packets::PacketId;
@@ -78,7 +78,11 @@ pub struct TceState {
 }
 
 impl MqttRouter {
-    pub fn start(tce: Option<TceState>, token: CancellationToken, acl: AclConfig) -> Self {
+    pub fn start(
+        tce: Option<TceState>,
+        token: CancellationToken,
+        permissions: PermissionsConfig,
+    ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
 
         let (system_tx, system_rx) = mpsc::unbounded_channel();
@@ -89,7 +93,7 @@ impl MqttRouter {
 
         let state = RouterState {
             token,
-            acl,
+            permissions,
             clients: SecondaryMap::new(),
             dead_clients: HashSet::default(),
             subscriptions: Subscriptions::default(),
@@ -339,7 +343,7 @@ struct RouterState {
     clients: SecondaryMap<ClientIndex, ClientState>,
     dead_clients: HashSet<ClientIndex>,
 
-    acl: AclConfig,
+    permissions: PermissionsConfig,
 
     subscriptions: Subscriptions,
     command_rx: mpsc::Receiver<(ClientIndex, RouterCommand)>,
@@ -686,7 +690,7 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
         return;
     };
 
-    let permissions = state.acl.get_topics_acl_config(&client.user);
+    let permissions = state.permissions.get_topics_acl_config(&client.user);
 
     // if state.connections[conn_id].message_tx.is_closed() {
     //     return;
@@ -704,10 +708,10 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
                 // as they would have failed validation on the frontend.
                 .ok_or(SubscribeReasonCode::Unspecified)
                 .and_then(|(filter, props)| {
-                    if !state.acl.check_acl_config(
+                    if !state.permissions.check_acl_config(
                         permissions,
                         filter.as_str(),
-                        crate::config::acl::TransactionType::Subscribe,
+                        crate::config::permissions::TransactionType::Subscribe,
                     ) {
                         Err(SubscribeReasonCode::NotAuthorized)?
                     }
@@ -1009,12 +1013,12 @@ fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: Pu
             return;
         };
 
-        let topics_config = state.acl.get_topics_acl_config(&client.user);
+        let topics_config = state.permissions.get_topics_acl_config(&client.user);
 
-        if !state.acl.check_acl_config(
+        if !state.permissions.check_acl_config(
             topics_config,
             &publish.topic,
-            crate::config::acl::TransactionType::Publish,
+            crate::config::permissions::TransactionType::Publish,
         ) {
             return;
         }

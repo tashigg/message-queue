@@ -269,7 +269,7 @@ describe("publish to node 1, receive from node2", () => {
         await client1.endAsync();
         await client2.endAsync();
     }),
-        test("ACL", async () => {
+        test("Permissions", async () => {
             async function waitForEventWithTimeout(emitter, eventName, timeoutMs) {
                 const timeout = new Promise((_, reject) =>
                     setTimeout(() => reject(new Error(`Timeout waiting for ${eventName}`)), timeoutMs)

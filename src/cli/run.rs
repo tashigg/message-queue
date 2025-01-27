@@ -5,8 +5,8 @@ use tashi_collections::HashMap;
 
 use crate::cli::LogFormat;
 use crate::config;
-use crate::config::acl::AclConfig;
 use crate::config::addresses::Addresses;
+use crate::config::permissions::PermissionsConfig;
 use crate::config::users::{AuthConfig, UsersConfig};
 use crate::mqtt::broker::{self, MqttBroker};
 use crate::mqtt::{KeepAlive, TceState};
@@ -182,7 +182,7 @@ impl SecretKeyOpt {
 
 pub fn main(args: RunArgs) -> crate::Result<()> {
     let mut users = config::users::read(&args.config_dir.join("users.toml"))?;
-    let acl = config::acl::read(&args.config_dir.join("acl.toml"))?;
+    let acl = config::permissions::read(&args.config_dir.join("permissions.toml"))?;
 
     // Merge any auth overrides from the command-line.
     users.auth.merge(&args.auth_config);
@@ -271,7 +271,7 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
 async fn main_async(
     args: RunArgs,
     users: UsersConfig,
-    acl_config: AclConfig,
+    permissions_config: PermissionsConfig,
     tce_config: Option<TceConfig>,
     tls_config: Option<broker::TlsConfig>,
     ws_config: Option<WsConfig>,
@@ -301,7 +301,7 @@ async fn main_async(
         tls_config,
         ws_config,
         users,
-        acl_config,
+        permissions_config,
         tce,
         KeepAlive::from_seconds(args.max_keep_alive),
     )
