@@ -425,12 +425,13 @@ jobs:
 
   tmq-docker-publish:
     if: ${{ inputs.release-version != '' }}
-    runs-on: tashi-arc-dind
+    # Just use CI minutes for this job since it's only run manually.
+    runs-on: ubuntu-latest
     # Just to make sure the rest of the release process went okay.
     needs: tmq-draft-release
     steps:
       - name: Log in to registry
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Fetch Linux Artifact
         uses: actions/download-artifact@v4
