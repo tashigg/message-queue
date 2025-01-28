@@ -23,6 +23,7 @@ use tracing::{Instrument, Span};
 
 use rumqttd_protocol::{QoS, RetainForwardRule, SubscribeReasonCode, UnsubAckReason};
 
+use crate::config::permissions::PermissionsConfig;
 use crate::map_join_error;
 use crate::mqtt::mailbox::MailSender;
 use crate::mqtt::packets::PacketId;
@@ -77,7 +78,11 @@ pub struct TceState {
 }
 
 impl MqttRouter {
-    pub fn start(tce: Option<TceState>, token: CancellationToken) -> Self {
+    pub fn start(
+        tce: Option<TceState>,
+        token: CancellationToken,
+        permissions: PermissionsConfig,
+    ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
 
         let (system_tx, system_rx) = mpsc::unbounded_channel();
@@ -88,6 +93,7 @@ impl MqttRouter {
 
         let state = RouterState {
             token,
+            permissions,
             clients: SecondaryMap::new(),
             dead_clients: HashSet::default(),
             subscriptions: Subscriptions::default(),
@@ -159,6 +165,7 @@ impl RouterHandle {
         connection_id: ConnectionId,
         client_index: ClientIndex,
         client_id: ClientId,
+        user: String,
         mail_tx: MailSender,
         clean_session: bool,
     ) -> crate::Result<RouterConnection> {
@@ -170,6 +177,7 @@ impl RouterHandle {
                 RouterCommand::NewConnection {
                     connection_id,
                     client_id,
+                    user,
                     message_tx,
                     mail_tx,
                     clean_session,
@@ -284,6 +292,7 @@ enum RouterCommand {
         connection_id: ConnectionId,
         client_id: ClientId,
         mail_tx: MailSender,
+        user: String,
         message_tx: mpsc::UnboundedSender<RouterMessage>,
         clean_session: bool,
     },
@@ -334,6 +343,8 @@ struct RouterState {
     clients: SecondaryMap<ClientIndex, ClientState>,
     dead_clients: HashSet<ClientIndex>,
 
+    permissions: PermissionsConfig,
+
     subscriptions: Subscriptions,
     command_rx: mpsc::Receiver<(ClientIndex, RouterCommand)>,
     system_rx: mpsc::UnboundedReceiver<SystemCommand>,
@@ -351,6 +362,7 @@ struct RouterState {
 struct ClientState {
     client_id: ClientId,
     mail_tx: MailSender,
+    user: String,
     subscriptions: ClientSubscriptions,
     current_connection: Option<ConnectionState>,
     clean_session: bool,
@@ -412,6 +424,15 @@ enum PublishOrigin<'a> {
     System { source: Span },
     Local(ClientIndex),
     Consensus(&'a CreatorId),
+}
+
+impl PublishOrigin<'_> {
+    pub fn get_client_index(&self) -> Option<ClientIndex> {
+        match self {
+            PublishOrigin::Local(client_index) => Some(*client_index),
+            _ => None,
+        }
+    }
 }
 
 impl Index<SubscriptionKind> for Subscriptions {
@@ -567,6 +588,7 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
         RouterCommand::NewConnection {
             connection_id,
             client_id,
+            user,
             message_tx,
             mail_tx,
             clean_session,
@@ -593,6 +615,7 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
                 client_idx,
                 ClientState {
                     client_id,
+                    user,
                     mail_tx,
                     subscriptions: Default::default(),
                     current_connection: Some(ConnectionState {
@@ -663,9 +686,11 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
         publish: Arc<PublishTrasaction>,
     }
 
-    if !state.clients.contains_key(client_idx) {
+    let Some(client) = state.clients.get(client_idx) else {
         return;
-    }
+    };
+
+    let permissions = state.permissions.get_topics_acl_config(&client.user);
 
     // if state.connections[conn_id].message_tx.is_closed() {
     //     return;
@@ -683,6 +708,14 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
                 // as they would have failed validation on the frontend.
                 .ok_or(SubscribeReasonCode::Unspecified)
                 .and_then(|(filter, props)| {
+                    if !state.permissions.check_acl_config(
+                        permissions,
+                        filter.as_str(),
+                        crate::config::permissions::TransactionType::Subscribe,
+                    ) {
+                        Err(SubscribeReasonCode::NotAuthorized)?
+                    }
+
                     let sub_kind = SubscriptionKind::from_filter(&filter)
                         .map_err(|_| SubscribeReasonCode::NotAuthorized)?;
 
@@ -973,6 +1006,23 @@ fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: Pu
             }
         },
     };
+
+    // Check if user has permission to publish
+    if let Some(client_index) = origin.get_client_index() {
+        let Some(client) = state.clients.get(client_index) else {
+            return;
+        };
+
+        let topics_config = state.permissions.get_topics_acl_config(&client.user);
+
+        if !state.permissions.check_acl_config(
+            topics_config,
+            &publish.topic,
+            crate::config::permissions::TransactionType::Publish,
+        ) {
+            return;
+        }
+    }
 
     // Only run this if TCE is not available.
     if state.tce.is_none() && publish.meta.retain() {

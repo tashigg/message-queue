@@ -4,7 +4,7 @@ use std::path::Path;
 use std::{fs, io};
 
 pub mod addresses;
-
+pub mod permissions;
 pub mod users;
 
 fn read_toml<T: DeserializeOwned>(name: &str, path: &Path) -> crate::Result<T> {
