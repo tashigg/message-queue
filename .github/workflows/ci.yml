@@ -51,9 +51,12 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
-          chmod 400 ~/.ssh/id_ed25519
-          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+          eval $(ssh-agent -s)
+          ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          
+          bash docker-util/test-ssh.sh
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -84,9 +87,12 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
-          chmod 400 ~/.ssh/id_ed25519
-          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+          eval $(ssh-agent -s)
+          ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          
+          bash docker-util/test-ssh.sh
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -119,6 +125,9 @@ jobs:
           eval $(ssh-agent -s)
           ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
           echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          
+          bash ../docker-util/test-ssh.sh
 
       - name: Build and run the message queue brokers
         run: docker compose up --build -d
@@ -179,19 +188,17 @@ jobs:
     needs: tmq-check
     runs-on: ghcr.io/cirruslabs/macos-runner:sonoma
     timeout-minutes: 30
-    env:
-      GIT_SSH_COMMAND: ssh -i .ssh/id_ed25519
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
       - name: Add TCE Deploy Key
         run: |
-          eval "$(ssh-agent -s)"
-          mkdir -p .ssh
-          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> .ssh/id_ed25519
-          chmod 400 .ssh/id_ed25519
-          ssh-add .ssh/id_ed25519
+          mkdir -p ~/.ssh
+          eval $(ssh-agent -s)
+          ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
           
           bash docker-util/test-ssh.sh
 
@@ -292,9 +299,12 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
-          chmod 400 ~/.ssh/id_ed25519
-          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+          eval $(ssh-agent -s)
+          ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          
+          bash docker-util/test-ssh.sh
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
@@ -345,9 +355,12 @@ jobs:
       - name: Add TCE Deploy Key
         run: |
           mkdir -p ~/.ssh
-          echo '${{ secrets.TASHIBOT_SSH_KEY }}' >> ~/.ssh/id_ed25519
-          chmod 400 ~/.ssh/id_ed25519
-          ssh-keyscan -t rsa github.com >> ~/.ssh/known_hosts
+          eval $(ssh-agent -s)
+          ssh-add - <<< "${{ secrets.TASHIBOT_SSH_KEY }}"
+          echo "SSH_AUTH_SOCK=$SSH_AUTH_SOCK" >> $GITHUB_ENV
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          
+          bash tmq/docker-util/test-ssh.sh
 
       - name: Check out
         uses: actions/checkout@v4

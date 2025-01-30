@@ -8,7 +8,7 @@
 # Docker has this annoying behavior where if you don't pass `--ssh`, it'll set the environment variable,
 # but not actually mount the socket, and everything that depends on this fails silently as well! Very fun.
 if [[ ! -S $SSH_AUTH_SOCK ]]; then
-  echo 'Error: Docker build command must be run with `--ssh default` to use ssh mounts.'
+  echo 'Error: $SSH_AUTH_SOCK does not exist. If building in Docker, build command must be run with `--ssh default` to use ssh mounts.'
   exit 1
 fi
 
