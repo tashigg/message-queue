@@ -346,7 +346,9 @@ fn create_tce_config(
     // The address book is only required to contain the existing nodes.
     let joining_running_session = !nodes.contains_key(&secret_key.public_key());
 
-    let mut tce_config = tashi_consensus_engine::Config::new(secret_key)
+    let mut tce_config = tashi_consensus_engine::Config::new(secret_key);
+
+    tce_config
         .initial_nodes(nodes)
         .enable_hole_punching(false)
         // TODO: we can dispatch messages before they come to consensus
@@ -356,12 +358,12 @@ fn create_tce_config(
         .fallen_behind_kick_seconds(None);
 
     if let Some(cert_path) = &config.cluster_cert {
-        tce_config = tce_config.tls_cert_chain(Certificate::load_chain_from(cert_path)?);
+        tce_config.tls_cert_chain(Certificate::load_chain_from(cert_path)?);
     }
 
     let roots = if let Some(root_cert_path) = &config.cluster_root_cert {
         let roots = Arc::new(RootCertificates::read_from(root_cert_path)?);
-        tce_config = tce_config.tls_roots(roots.clone());
+        tce_config.tls_roots(roots.clone());
         Some(roots)
     } else {
         None
@@ -370,7 +372,7 @@ fn create_tce_config(
     let (add_nodes_tx, add_nodes_rx) = mpsc::unbounded_channel();
 
     if config.cluster_accept_peer_with_cert {
-        tce_config = tce_config.on_unknown_connection(move |addr, key, certs| {
+        tce_config.on_unknown_connection(move |addr, key, certs| {
             // Certificate chain has already been verified by TCE at this point.
 
             add_nodes_tx
