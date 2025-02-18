@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: foxmq-demo-config
+data:
+  "permissions.toml": |
+    [[permissions.'*'.topic]]
+    filter = "pixel_pump_request"
+    allowed = ["publish"]
+    
+    [[permissions.'*'.topic]]
+    filter = "pixel_pump"
+    allowed = ["subscribe"]
+
+    [[permissions.pixel-admin.topic]]
+    filter = "pixel_pump"
+    allowed = ["subscribe", "publish"]
+    
+    [[permissions.pixel-admin.topic]]
+    filter = "pixel_pump_request"
+    allowed = ["subscribe", "publish"]

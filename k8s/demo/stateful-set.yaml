@@ -47,6 +47,9 @@ spec:
         - name: public-keys
           configMap:
             name: foxmq-demo-public-keys
+        - name: config
+          configMap:
+            name: foxmq-demo-config
 
       initContainers:
         - name: create-foxmq-d
@@ -77,6 +80,9 @@ spec:
             - name: public-keys
               mountPath: /etc/foxmq.d.in/public-keys/
 
+            - name: config
+              mountPath: /etc/foxmq.d.in/config/
+
             - name: foxmq-d
               mountPath: /etc/foxmq.d/
 
@@ -89,6 +95,8 @@ spec:
               
               cp /etc/foxmq.d.in/users/demo-$POD_INDEX.toml /etc/foxmq.d/users.toml
               cp /etc/foxmq.d.in/secret-keys/key-$POD_INDEX.pem /etc/foxmq.d/secret-key.pem
+              
+              cp /etc/foxmq.d.in/config/* /etc/foxmq.d/
               
               # Synthesize address book
               for (( i=0; i<NUM_REPLICAS; i++ )); do
@@ -105,7 +113,7 @@ spec:
 
       containers:
         - name: foxmq
-          image: ghcr.io/tashigg/foxmq:0.2.1
+          image: ghcr.io/tashigg/foxmq:0.3.0
 
           env:
             - name: RUST_LOG
