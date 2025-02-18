@@ -121,6 +121,7 @@ spec:
 
           args:
             - run
+            - --log=json
             - --websockets
             - --secret-key-file=/etc/foxmq.d/secret-key.pem
             - /etc/foxmq.d/
