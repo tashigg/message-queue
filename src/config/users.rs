@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use tashi_collections::HashMap;
+use crate::collections::HashMap;
 
 #[derive(serde::Deserialize, serde::Serialize, Default)]
 pub struct UsersConfig {

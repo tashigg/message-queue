@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tashi_collections::HashMap;
+use crate::collections::HashMap;
 
 use crate::cli::LogFormat;
 use crate::config;

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use color_eyre::eyre::WrapErr;
 use rand::distributions::Uniform;
 use rand::Rng;
-use tashi_collections::HashMap;
+use crate::collections::HashMap;
 
 use crate::cli::LogFormat;
 use crate::config::users::{AuthConfig, User, UsersConfig};

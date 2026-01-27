@@ -9,7 +9,7 @@ use futures::future::OptionFuture;
 use rand::RngCore;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use slotmap::SlotMap;
-use tashi_collections::{hash_map, HashMap};
+use crate::collections::{hash_map, HashMap};
 use tashi_consensus_engine::{Platform, TxnPermit, TxnTryReserveError};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};

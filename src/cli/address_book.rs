@@ -6,7 +6,7 @@ use std::{fs, io};
 use color_eyre::eyre;
 use color_eyre::eyre::{eyre, WrapErr};
 use serde::Serialize;
-use tashi_collections::HashSet;
+use crate::collections::HashSet;
 use tashi_consensus_engine::SecretKey;
 
 use crate::cli::LogFormat;

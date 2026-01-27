@@ -1,6 +1,6 @@
 use std::num::NonZeroU16;
 
-use tashi_collections::HashMap;
+use crate::collections::HashMap;
 
 use rumqttd_protocol::{SubscribeReasonCode, UnsubAckReason};
 
