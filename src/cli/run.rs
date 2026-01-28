@@ -1,9 +1,8 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use crate::collections::HashMap;
-
 use crate::cli::LogFormat;
+use crate::collections::HashMap;
 use crate::config;
 use crate::config::addresses::Addresses;
 use crate::config::permissions::PermissionsConfig;
@@ -349,7 +348,7 @@ fn create_tce_config(
     let mut tce_config = tashi_consensus_engine::Config::new(secret_key);
 
     tce_config
-        .initial_nodes(nodes)
+        .initial_nodes(nodes.into_iter().collect())
         .enable_hole_punching(false)
         // TODO: we can dispatch messages before they come to consensus
         // but we need to make sure we don't duplicate PUBLISHes.

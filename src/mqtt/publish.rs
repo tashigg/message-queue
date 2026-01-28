@@ -1,6 +1,7 @@
-use bytes::Bytes;
 use std::num::NonZeroU32;
 use std::ops::Not;
+
+use bytes::Bytes;
 use time::format_description::well_known::Rfc3339;
 
 use crate::collections::FnvHashMap;

@@ -7,7 +7,6 @@ use std::str::FromStr;
 
 use rand::distributions::{Alphanumeric, Distribution};
 use rand::Rng;
-use crate::collections::Equivalent;
 
 /// The maximum length a `ClientId` is allowed to be.
 ///
@@ -194,11 +193,6 @@ impl PartialEq<ClientId> for str {
 }
 
 
-impl Equivalent<str> for ClientId {
-    fn equivalent(&self, key: &str) -> bool {
-        self == key
-    }
-}
 
 impl From<ClientId> for String {
     fn from(value: ClientId) -> Self {

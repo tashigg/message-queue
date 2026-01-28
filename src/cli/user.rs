@@ -6,9 +6,8 @@ use std::path::{Path, PathBuf};
 use color_eyre::eyre::WrapErr;
 use rand::distributions::Uniform;
 use rand::Rng;
-use crate::collections::HashMap;
-
 use crate::cli::LogFormat;
+use crate::collections::HashMap;
 use crate::config::users::{AuthConfig, User, UsersConfig};
 
 const DEFAULT_PASSWORD_LEN: usize = 12;

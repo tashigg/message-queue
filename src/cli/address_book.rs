@@ -6,10 +6,10 @@ use std::{fs, io};
 use color_eyre::eyre;
 use color_eyre::eyre::{eyre, WrapErr};
 use serde::Serialize;
-use crate::collections::HashSet;
 use tashi_consensus_engine::SecretKey;
 
 use crate::cli::LogFormat;
+use crate::collections::HashSet;
 use crate::config::addresses::Address;
 
 #[derive(clap::Args, Clone, Debug)]
@@ -130,7 +130,7 @@ fn generate_address_book(
 
     let mut address_book = String::new();
 
-    let mut address_set = HashSet::with_hasher(Default::default());
+    let mut address_set = HashSet::<SocketAddr>::new();
 
     let address_book_path = output_dir.join("address-book.toml");
 
