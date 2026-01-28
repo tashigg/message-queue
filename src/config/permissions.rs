@@ -1,6 +1,6 @@
 use std::{path::Path, str::FromStr};
 
-use tashi_collections::HashMap;
+use crate::collections::HashMap;
 
 use crate::mqtt::trie::Filter;
 

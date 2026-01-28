@@ -9,10 +9,11 @@ use bytes::BytesMut;
 use color_eyre::eyre;
 use der::Encode;
 use futures::future::OptionFuture;
-use tashi_collections::FnvHashMap;
 use tokio::sync::oneshot;
 use tokio::time::{Instant, Sleep};
 use tokio_util::sync::CancellationToken;
+
+use crate::collections::FnvHashMap;
 
 use protocol::{
     ConnAck, ConnAckProperties, ConnectReturnCode, Disconnect, DisconnectProperties,

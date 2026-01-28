@@ -3,9 +3,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::task::Poll;
 use std::{cmp, future};
-use tashi_collections::HashSet;
 
 use tokio::sync::mpsc;
+
+use crate::collections::HashSet;
 
 use rumqttd_protocol::QoS;
 

@@ -1,8 +1,8 @@
 use std::num::NonZeroU16;
 
-use tashi_collections::HashMap;
-
 use rumqttd_protocol::{SubscribeReasonCode, UnsubAckReason};
+
+use crate::collections::HashMap;
 
 #[derive(Copy, Clone, PartialEq, Eq, Ord, PartialOrd, Hash, Debug)]
 pub struct PacketId(NonZeroU16);

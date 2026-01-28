@@ -20,11 +20,8 @@ default-run = "foxmq"
 git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
 rev = "aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
 
-[dependencies.tashi-collections]
-git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
-
 [dependencies]
+fnv = "1.0.7"
 argon2 = { version = "0.5.3", features = ["std"] }
 bytes = "1.5.0"
 color-eyre = "0.6.2"

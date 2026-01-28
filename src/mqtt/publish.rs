@@ -1,9 +1,10 @@
-use bytes::Bytes;
 use std::num::NonZeroU32;
 use std::ops::Not;
+
+use bytes::Bytes;
 use time::format_description::well_known::Rfc3339;
 
-use tashi_collections::FnvHashMap;
+use crate::collections::FnvHashMap;
 
 use protocol::{
     ConnectReturnCode, DisconnectReasonCode, LastWill, LastWillProperties, Packet, PubAck,

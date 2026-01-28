@@ -8,6 +8,7 @@ pub use tashi_consensus_engine::{flatten_task_result, map_join_error};
 use crate::cli::LogFormat;
 
 pub mod cli;
+pub mod collections;
 
 pub mod config;
 
