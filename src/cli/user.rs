@@ -3,12 +3,12 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
-use color_eyre::eyre::WrapErr;
-use rand::distributions::Uniform;
-use rand::Rng;
 use crate::cli::LogFormat;
 use crate::collections::HashMap;
 use crate::config::users::{AuthConfig, User, UsersConfig};
+use color_eyre::eyre::WrapErr;
+use rand::distributions::Uniform;
+use rand::Rng;
 
 const DEFAULT_PASSWORD_LEN: usize = 12;
 

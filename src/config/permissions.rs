@@ -55,13 +55,13 @@ impl PermissionsConfig {
         transaction_type: TransactionType,
     ) -> bool {
         // Allows everything if no topics config was found.
-        topics_config.map_or(true, |perms| {
+        topics_config.is_none_or(|perms| {
             perms
                 .topic
                 .iter()
                 .find(|k| k.filter.matches_topic(topic_name))
-                .map_or(true, |k| {
-                    k.allowed.iter().any(|k| *k == transaction_type)
+                .is_none_or(|k| {
+                    k.allowed.contains(&transaction_type)
                         || !k.denied.iter().all(|k| *k == transaction_type)
                 })
         })

@@ -3,7 +3,7 @@ use std::pin::Pin;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{cmp, iter};
+use std::cmp;
 
 use bytes::BytesMut;
 use color_eyre::eyre;
@@ -888,8 +888,7 @@ impl<S: MqttSocket> Connection<S> {
             self.send(Packet::UnsubAck(
                 UnsubAck {
                     pkid: unsub.pkid,
-                    reasons: iter::repeat(UnsubAckReason::PacketIdentifierInUse)
-                        .take(unsub.filters.len())
+                    reasons: std::iter::repeat_n(UnsubAckReason::PacketIdentifierInUse, unsub.filters.len())
                         .collect(),
                 },
                 None,

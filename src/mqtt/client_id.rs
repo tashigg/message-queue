@@ -192,8 +192,6 @@ impl PartialEq<ClientId> for str {
     }
 }
 
-
-
 impl From<ClientId> for String {
     fn from(value: ClientId) -> Self {
         value.as_str().into()
