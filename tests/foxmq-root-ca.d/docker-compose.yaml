@@ -9,9 +9,9 @@ services:
       dockerfile: tests/Dockerfile
       ssh:
         - default
-    image: message-queue-test
+    image: foxmq-test
     volumes:
-      - .:/home/message-queue/foxmq.d
+      - .:/home/foxmq/foxmq.d
     ports:
       - "1883:1883"
     networks:
@@ -28,16 +28,16 @@ services:
       --cluster-root-cert=foxmq.d/ca.crt
       --cluster-accept-peer-with-cert
       --server-name broker1.example.com
-      /home/message-queue/foxmq.d
+      /home/foxmq/foxmq.d
 
   broker2:
     container_name: broker2
     depends_on:
       # Ensure we start after `broker1` for proper IP address assignment
       - broker1
-    image: message-queue-test
+    image: foxmq-test
     volumes:
-      - .:/home/message-queue/foxmq.d
+      - .:/home/foxmq/foxmq.d
     ports:
       - "1884:1883"
     networks:
@@ -53,16 +53,16 @@ services:
       --cluster-root-cert=foxmq.d/ca.crt
       --cluster-accept-peer-with-cert
       --server-name broker2.example.com
-      /home/message-queue/foxmq.d
+      /home/foxmq/foxmq.d
 
   broker3:
     container_name: broker3
     depends_on:
       # Ensure we start after `broker2` for proper IP address assignment
       - broker2
-    image: message-queue-test
+    image: foxmq-test
     volumes:
-      - .:/home/message-queue/foxmq.d
+      - .:/home/foxmq/foxmq.d
     ports:
       - "1885:1883"
     networks:
@@ -78,16 +78,16 @@ services:
       --cluster-root-cert=foxmq.d/ca.crt
       --cluster-accept-peer-with-cert
       --server-name broker2.example.com
-      /home/message-queue/foxmq.d
+      /home/foxmq/foxmq.d
 
   broker4:
     container_name: broker4
     depends_on:
       # Ensure we start after `broker3` for proper IP address assignment\
       - broker3
-    image: message-queue-test
+    image: foxmq-test
     volumes:
-      - .:/home/message-queue/foxmq.d
+      - .:/home/foxmq/foxmq.d
     ports:
       - "1886:1883"
     networks:
@@ -104,7 +104,7 @@ services:
       --cluster-root-cert=foxmq.d/ca.crt
       --cluster-accept-peer-with-cert
       --server-name broker4.example.com
-      /home/message-queue/foxmq.d
+      /home/foxmq/foxmq.d
 
 networks:
   mesh-app-bridge:
