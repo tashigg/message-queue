@@ -250,6 +250,5 @@ fn find_client_ip(connected_addr: IpAddr, x_forwarded_for: &HeaderValue) -> Opti
                 })
                 .ok()
         })
-        .filter(|ip| ip != &connected_addr)
-        .next_back()
+        .rfind(|ip| ip != &connected_addr)
 }
