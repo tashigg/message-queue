@@ -9,9 +9,9 @@ services:
       dockerfile: tests/Dockerfile
       ssh:
         - default
-    image: message-queue-test
+    image: foxmq-test
     volumes:
-      - ./foxmq.d:/home/message-queue/foxmq.d
+      - ./foxmq.d:/home/foxmq/foxmq.d
     ports:
       - "1883:1883"
       - "8080:8080"
@@ -30,15 +30,15 @@ services:
       --secret-key-file foxmq.d/key_0.pem
       --tls-cert-file=foxmq.d/key_0.crt
       --server-name broker1.example.com
-      /home/message-queue/foxmq.d
+      /home/foxmq/foxmq.d
 
   broker2:
     container_name: broker2
     depends_on:
       - broker1
-    image: message-queue-test
+    image: foxmq-test
     volumes:
-      - ./foxmq.d:/home/message-queue/foxmq.d
+      - ./foxmq.d:/home/foxmq/foxmq.d
     ports:
       - "1884:1883"
       - "8081:8080"
@@ -56,7 +56,7 @@ services:
       --secret-key-file foxmq.d/key_1.pem
       --tls-cert-file=foxmq.d/key_1.crt
       --server-name broker2.example.com
-      /home/message-queue/foxmq.d
+      /home/foxmq/foxmq.d
 
 networks:
   mesh-app-bridge:

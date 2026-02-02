@@ -1,4 +1,4 @@
-# message-queue
+# foxmq
 Message queue MeshApp utilizing Tashi Consensus Engine
 
 ### Checking Out

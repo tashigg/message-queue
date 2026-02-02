@@ -1,6 +1,6 @@
 FROM rust:1-bookworm
 
-WORKDIR /home/message-queue
+WORKDIR /home/foxmq
 
 # The minimum number of files required to allow `cargo fetch` to cache all dependencies.
 # We do this separately from the `COPY ./ .` so most code changes don't invalidate the `cargo fetch` layer.
@@ -35,6 +35,6 @@ RUN cargo build --release -p tokio -p tracing -p tashi-consensus-engine
 
 COPY ./ .
 
-WORKDIR /home/message-queue
+WORKDIR /home/foxmq
 
 RUN cargo build --release
