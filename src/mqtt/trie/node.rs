@@ -19,8 +19,7 @@ pub(super) struct NodeLeaf<T> {
 
 impl<T> NodeLeaf<T> {
     pub(super) fn all(&self, f: &mut impl FnMut(&T) -> bool) -> bool {
-        self.exact_val.as_ref().is_none_or(&mut *f)
-            && self.descendant_val.as_ref().is_none_or(f)
+        self.exact_val.as_ref().is_none_or(&mut *f) && self.descendant_val.as_ref().is_none_or(f)
     }
 
     fn is_empty(&self) -> bool {
