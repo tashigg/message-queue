@@ -363,7 +363,7 @@ pub fn txn_to_packet(
             Bytes::copy_from_slice(txn.topic.as_bytes()),
             txn.payload.0.clone(),
         ),
-        (!sub_ids.is_empty() || txn.properties.is_some()).then(|| {
+        (!sub_ids.is_empty() || txn.properties.is_some() || include_broker_timestamps).then(|| {
             macro_rules! clone_prop {
                 ($prop:ident) => {
                     txn.properties
