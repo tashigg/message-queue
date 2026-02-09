@@ -3,24 +3,20 @@ use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 use std::ops::{Index, IndexMut};
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Instant, SystemTime};
 
 use bytes::Bytes;
-use color_eyre::eyre::WrapErr;
 use color_eyre::eyre::{self};
-use der::{Decode, Encode};
+use der::Decode;
 use slotmap::SecondaryMap;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendError;
 use tokio::task;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, Span};
+use tracing::Span;
 
 use crate::collections::{HashMap, HashSet};
-use tashi_consensus_engine::{
-    CreatorId, Message, MessageStream, Platform, PlatformEvent, RootCertificates,
-};
+use tashi_vertex::{Context, Engine, Event, KeyPublic, Message};
 
 use rumqttd_protocol::{QoS, RetainForwardRule, SubscribeReasonCode, UnsubAckReason};
 
@@ -32,7 +28,7 @@ use crate::mqtt::retain::RetainedMessages;
 use crate::mqtt::trie::{self, Filter, FilterTrie, TopicName};
 use crate::mqtt::{ClientId, ClientIndex, ConnectionId};
 use crate::transaction::{
-    AddNodeTransaction, BytesAsOctetString, PublishMeta, PublishTrasaction, TimestampSeconds,
+    BytesAsOctetString, PublishMeta, PublishTrasaction, TimestampSeconds,
     Transaction, TransactionData,
 };
 
@@ -71,11 +67,10 @@ pub struct FilterProperties {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct SubscriptionId(NonZeroU32);
 
+#[derive(Clone)]
 pub struct TceState {
-    pub platform: Arc<Platform>,
-    pub messages: MessageStream,
-    pub roots: Option<Arc<RootCertificates>>,
-    pub add_nodes: mpsc::UnboundedReceiver<AddNodeTransaction>,
+    pub engine: Arc<Engine>,
+    pub context: Arc<Context>,
 }
 
 impl MqttRouter {
@@ -424,7 +419,7 @@ struct Subscription {
 enum PublishOrigin<'a> {
     System { source: Span },
     Local(ClientIndex),
-    Consensus(&'a CreatorId),
+    Consensus(&'a KeyPublic),
 }
 
 impl PublishOrigin<'_> {
@@ -530,7 +525,7 @@ impl ClientState {
 struct InvalidSubscriptionKind;
 
 use futures::future::OptionFuture;
-use futures::TryFutureExt;
+// use futures::TryFutureExt;
 
 // Experimenting with using free functions instead of methods for less right-drift in core logic.
 // Methods should be added to `RouterState` or its constituent types
@@ -538,12 +533,16 @@ use futures::TryFutureExt;
 #[tracing::instrument(name = "router", skip(state))]
 async fn run(mut state: RouterState) -> crate::Result<()> {
     loop {
-        let mut tce_msgs_fut = OptionFuture::from(None);
-        let mut add_nodes = OptionFuture::from(None);
+        // let mut tce_msgs_fut = OptionFuture::from(None);
+        // let mut add_nodes = OptionFuture::from(None);
 
-        if let Some(tce) = &mut state.tce {
-            tce_msgs_fut = Some(tce.messages.next_message()).into();
-            add_nodes = Some(tce.add_nodes.recv()).into();
+        let mut tce_msg_fut = OptionFuture::from(None);
+
+        if let Some(tce) = &state.tce {
+            let engine = tce.engine.clone();
+            tce_msg_fut = Some(async move {
+                engine.recv_message().await
+            }).into();
         }
 
         tokio::select! {
@@ -561,16 +560,29 @@ async fn run(mut state: RouterState) -> crate::Result<()> {
                     msg.expect("BUG: system_rx cannot return None as its Sender is held in a `static`")
                 );
             }
-            Some(res) = tce_msgs_fut => {
-                    let Some(msg) = res.wrap_err("error from MessageStream")? else {
-                        tracing::debug!("Message stream closed; exiting.");
-                        break;
-                    };
-                    handle_message(&mut state, msg)
+            Some(res) = tce_msg_fut => {
+                match res {
+                    Ok(Some(Message::Event(event))) => {
+                         handle_tashi_event(&mut state, event);
+                    }
+                    Ok(Some(Message::SyncPoint(_))) => {
+                         tracing::trace!("received sync point");
+                    }
+                    Ok(None) => {
+                         tracing::debug!("Tashi Vertex engine stopped; exiting.");
+                         break;
+                    }
+                    Err(e) => {
+                         tracing::error!(?e, "Tashi Vertex engine error");
+                         break;
+                    }
+                }
             }
+            /*
             Some(Some(add_node)) = add_nodes => {
                 handle_add_node(&mut state, add_node, false);
             },
+            */
             _ = state.token.cancelled() => {
                 break;
             }
@@ -630,10 +642,6 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
         RouterCommand::Transaction(txn) => match txn.data {
             TransactionData::Publish(publish) => {
                 dispatch(state, publish.into(), PublishOrigin::Local(client_idx))
-            }
-            TransactionData::AddNode(add_node) => {
-                // This really shouldn't be called from here, but there's little harm in doing it.
-                handle_add_node(state, add_node, false);
             }
         },
         RouterCommand::Subscribe(request) => handle_subscribe(state, client_idx, request),
@@ -804,41 +812,21 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
     }
 }
 
-fn handle_message(state: &mut RouterState, message: Message) {
-    if let Some(tce) = state.tce.as_ref() {
-        let tce_platform = tce.platform.clone();
-        match message {
-            Message::SyncPoint(sync_point) => {
-                // TODO: handle sync points
-                // TODO: serialize retained messages [TG-492]
-                tracing::debug!(?sync_point, "received sync point");
-            }
-            Message::Event(event) => {
-                handle_tce_event(state, event, &tce_platform);
-            }
-        }
-    }
-}
+fn handle_tashi_event(state: &mut RouterState, event: Event) {
+    let consensus_timestamp = event.consensus_at();
 
-#[tracing::instrument(skip_all, fields(creator=%event.creator, timestamp=event.timestamp_created()))]
-fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Platform) {
-    let Some(consensus_timestamp) = event.timestamp_finalized else {
-        return;
-    };
-
-    // Way too noisy if we don't filter this.
-    if !event.application_transactions().is_empty() {
+    if event.transaction_count() > 0 {
         tracing::trace!(
             "received event with {} application transactions",
-            event.application_transactions().len()
+            event.transaction_count()
         );
     }
 
     // TODO: we'll want to check if our own events are coming to consensus for QoS 1 and 2
     // and re-send them if not.
 
-    for (idx, transaction) in event.application_transactions().iter().enumerate() {
-        let transaction = match Transaction::from_der(transaction.as_bytes()) {
+    for (idx, transaction_bytes) in event.transactions().enumerate() {
+        let transaction = match Transaction::from_der(transaction_bytes) {
             Ok(txn) => txn,
             Err(e) => {
                 // This isn't a fatal error.
@@ -851,14 +839,16 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Pl
             TransactionData::Publish(publish) => {
                 let publish = Arc::new(publish);
 
-                if &event.creator != platform.creator_id() {
+                // FIXME: we need a way to check if we created this event to avoid re-dispatching
+                // local messages.
+                // if event.creator() != platform.creator_id() {
                     // Locally sent messages would have been dispatched directly
                     dispatch(
                         state,
                         publish.clone(),
-                        PublishOrigin::Consensus(&event.creator),
+                        PublishOrigin::Consensus(event.creator()),
                     );
-                }
+                // }
 
                 // Only for TCE messages because we need to have total ordering
                 // to know which retained message is the latest for a given topic.
@@ -868,13 +858,8 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Pl
                             .retained_messages
                             .insert(consensus_timestamp, idx, publish);
                     } else {
-                        // Empty payload means clear the retained message.
-                        state.retained_messages.remove(&publish.topic);
                     }
                 }
-            }
-            TransactionData::AddNode(add_node) => {
-                handle_add_node(state, add_node, true);
             }
         }
     }
@@ -918,63 +903,12 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
     }
 }
 
+/*
 #[tracing::instrument(skip_all, fields(key=%add_node.key, addr=%add_node.socket_addr.0, from_consensus))]
 fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_consensus: bool) {
-    let Some(tce) = &state.tce else {
-        tracing::warn!("BUG: received AddNode with no TCE instance configured");
-        return;
-    };
-
-    let Some(roots) = &tce.roots else {
-        tracing::debug!("rejecting AddNode with no TLS roots configured");
-        return;
-    };
-
-    if let Err(e) = roots.verify_chain(&add_node.certs) {
-        tracing::debug!("rejecting AddNode with invalid TLS roots: {e:?}");
-        return;
-    }
-
-    let key = add_node.key.clone();
-    let addr = add_node.socket_addr.0;
-
-    if !from_consensus {
-        let platform = tce.platform.clone();
-
-        // If the TCE queue is full, don't block the router task.
-        //
-        // FIXME: this is technically unbounded so an attacker could theoretically DoS us
-        // by repeatedly connecting with new keys, but they'd have to have a valid TLS root cert
-        // which means they *should* be a trustworthy peer to begin with.
-        tokio::spawn(
-            async move {
-                let permit = platform.reserve_tx().await.wrap_err("TCE shutting down")?;
-
-                let transaction = Transaction {
-                    data: TransactionData::AddNode(add_node),
-                }
-                .to_der()
-                .wrap_err("error encoding transaction")?;
-
-                permit.send(transaction.try_into().wrap_err("transaction too large")?);
-
-                eyre::Ok(())
-            }
-            .inspect_err(|e| tracing::warn!("error sending AddNodeTransaction to cluster: {e:?}"))
-            .instrument(tracing::debug_span!("send_txn")),
-        );
-    }
-
-    tracing::info!("voting to add node");
-
-    if tce
-        .platform
-        .vote_add_node(key, addr, Duration::from_secs(60))
-        .is_err()
-    {
-        tracing::debug!("TCE shutting down");
-    }
+  
 }
+*/
 
 // `PublishTransaction` wrapped in `Arc` for cheap clones.
 // This is a potential candidate for `triomphe::Arc` but `PublishTransaction` is so large
@@ -1151,18 +1085,41 @@ pub fn system_publish(topic: impl Into<String>, message: impl Into<Bytes>) {
     let res = system_tx.send(SystemCommand::Publish {
         source,
         txn: PublishTrasaction {
-            topic,
+            topic: topic.clone(),
             meta: PublishMeta::new(QoS::AtMostOnce, false, false),
-            payload: BytesAsOctetString(message),
+            payload: BytesAsOctetString(message.into()),
             timestamp_received: TimestampSeconds::now(),
             properties: None,
         },
     });
 
-    if let Err(SendError(SystemCommand::Publish { txn, .. })) = res {
+    if let Err(e) = res {
         tracing::debug!(
-            topic = txn.topic,
-            "Attempted to publish to system topic, but MqttRouter is dead"
+            topic = parsed_topic.root(),
+            "Attempting to publish to system command channel after MqttRouter is shut down: {e}"
         );
     }
 }
+
+// fn handle_tashi_event(state: &mut RouterState, event: tashi_vertex::Event) {
+//    match event {
+//        tashi_vertex::Event::Consensus { transaction, creator, timestamp: _ } => {
+//            // Parse transaction
+//            let txn = match Transaction::from_der(transaction.as_ref()) {
+//                Ok(txn) => txn,
+//                Err(e) => {
+//                    tracing::warn!("Failed to parse consensus transaction: {}", e);
+//                    return;
+//                }
+//            };
+// 
+//            match txn.data {
+//                 TransactionData::Publish(publish) => {
+//                     dispatch(state, publish.into(), PublishOrigin::Consensus(&creator));
+//                 }
+//                 // TransactionData::AddNode(_) => {} // Disabled
+//            }
+//        }
+//        _ => {}
+//    }
+// }

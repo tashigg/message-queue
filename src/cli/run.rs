@@ -1,22 +1,19 @@
 use crate::cli::LogFormat;
-use crate::collections::HashMap;
 use crate::config;
 use crate::config::addresses::Addresses;
 use crate::config::permissions::PermissionsConfig;
 use crate::config::users::{AuthConfig, UsersConfig};
 use crate::mqtt::broker::{self, MqttBroker};
 use crate::mqtt::{KeepAlive, TceState};
-use crate::transaction::AddNodeTransaction;
+// use crate::transaction::AddNodeTransaction;
 use color_eyre::eyre;
 use color_eyre::eyre::Context;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
-use tashi_consensus_engine::quic::QuicSocket;
-use tashi_consensus_engine::{
-    Certificate, Platform, RootCertificates, SecretKey, UnknownConnectionAction,
-};
-use tokio::sync::mpsc;
+use tashi_vertex::{KeySecret, KeyPublic, Options};
+use tokio_rustls::rustls;
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct RunArgs {
@@ -155,27 +152,46 @@ pub struct ClusterConfig {
     pub cluster_accept_peer_with_cert: bool,
 }
 
+trait KeySecretToRustls {
+    fn to_rustls(&self) -> crate::Result<rustls::pki_types::PrivateKeyDer<'static>>;
+}
+
+impl KeySecretToRustls for KeySecret {
+    fn to_rustls(&self) -> crate::Result<rustls::pki_types::PrivateKeyDer<'static>> {
+        let der = self.to_der_vec().wrap_err("failed to encode key to DER")?;
+        Ok(rustls::pki_types::PrivateKeyDer::Pkcs8(der.into()))
+    }
+}
+
 struct TceConfig {
-    config: tashi_consensus_engine::Config,
-    roots: Option<Arc<RootCertificates>>,
-    add_nodes: mpsc::UnboundedReceiver<AddNodeTransaction>,
-    joining_running_session: bool,
+    options: Options,
+    pub secret_key: KeySecret,
+    pub _joining_running_session: bool,
+    pub initial_peers: Vec<(KeyPublic, SocketAddr)>,
 }
 
 impl SecretKeyOpt {
     /// NOTE: uses blocking I/O internally if the secret key was specified as a file.
-    pub fn read_key(&self) -> crate::Result<SecretKey> {
-        if let Some(der) = &self.secret_key {
-            let der_bytes = hex::decode(der).wrap_err("error decoding hex-encoded secret key")?;
-            return SecretKey::from_der(&der_bytes)
-                .wrap_err("error decoding P-256 secret key from DER");
+    pub fn read_key(&self) -> crate::Result<KeySecret> {
+        if let Some(key_input) = &self.secret_key {
+            // First, try to parse directly as a Base58 secret key
+            if let Ok(key) = KeySecret::from_str(key_input) {
+                return Ok(key);
+            }
+
+            // If that fails, treat it as a file path
+            let content = std::fs::read_to_string(key_input)
+                .wrap_err_with(|| format!("failed to read secret key file: {key_input}"))?;
+            
+            return KeySecret::from_str(content.trim())
+                .wrap_err("failed to parse secret key from file");
         }
 
         if let Some(path) = &self.secret_key_file {
             return read_secret_key(path);
         }
 
-        Ok(SecretKey::generate())
+        Ok(KeySecret::generate())
     }
 }
 
@@ -243,13 +259,9 @@ pub fn main(args: RunArgs) -> crate::Result<()> {
                         )
                     })?
             } else {
-                vec![Certificate::generate_self_signed(
-                    &key,
-                    tls_socket_addr,
-                    &args.tls_config.server_name,
-                    None,
-                )?
-                .into_rustls()]
+                // Certificate::generate_self_signed was from TCE.
+                // We need to implement using rcgen or similar if needed, or require cert file.
+                eyre::bail!("Self-signed certificate generation is temporarily disabled during migration. Please provide a certificate file.");
             };
 
             eyre::Ok(broker::TlsConfig {
@@ -277,23 +289,37 @@ async fn main_async(
 ) -> crate::Result<()> {
     let tce = match tce_config {
         Some(tce_config) => {
-            let (platform, messages) = Platform::start(
-                tce_config.config,
-                QuicSocket::bind_udp(args.cluster_addr).await?,
-                tce_config.joining_running_session,
-            )?;
+            let context = Arc::new(tashi_vertex::Context::new().wrap_err("failed to create context")?);
+            let socket = tashi_vertex::Socket::bind(&context, &args.cluster_addr.to_string())
+                .await
+                .wrap_err("failed to bind cluster socket")?;
+            let mut peers = tashi_vertex::Peers::new().wrap_err("failed to create peers")?;
+
+            for (key, addr) in tce_config.initial_peers {
+                peers.insert(
+                    &addr.to_string(),
+                    &key,
+                    tashi_vertex::PeerCapabilities::default(),
+                ).wrap_err("failed to add initial peer")?;
+            }
+
+            let engine = tashi_vertex::Engine::start(
+                &context,
+                socket,
+                tce_config.options,
+                &tce_config.secret_key,
+                peers,
+            ).wrap_err("failed to start engine")?;
 
             Some(TceState {
-                platform: Arc::new(platform),
-                messages,
-                roots: tce_config.roots,
-                add_nodes: tce_config.add_nodes,
+                engine: Arc::new(engine),
+                context,
             })
         }
         None => None,
     };
 
-    let tce_platform = tce.as_ref().map(|tce| tce.platform.clone());
+    let tce_platform = tce.as_ref().map(|tce| tce.engine.clone());
 
     let mut broker = MqttBroker::bind(
         args.mqtt_addr,
@@ -315,8 +341,8 @@ async fn main_async(
             res = tokio::signal::ctrl_c() => {
                 res.wrap_err("error from ctrl_c() handler")?;
 
-                if let Some(platform) = tce_platform {
-                    platform.shutdown().await;
+                if let Some(_platform) = tce_platform {
+                    // platform.shutdown().await;
                 }
                 break;
             }
@@ -332,34 +358,37 @@ async fn main_async(
 }
 
 fn create_tce_config(
-    secret_key: SecretKey,
+    secret_key: KeySecret,
     addresses: &Addresses,
     config: &ClusterConfig,
 ) -> crate::Result<TceConfig> {
-    let nodes: HashMap<_, _> = addresses
-        .addresses
-        .iter()
-        .map(|address| (address.key.clone(), address.addr))
-        .collect();
+    // let nodes: HashMap<_, _> = addresses
+    //     .addresses
+    //     .iter()
+    //     .map(|address| (address.key.clone(), address.addr))
+    //     .collect();
 
     // The address book is only required to contain the existing nodes.
-    let joining_running_session = !nodes.contains_key(&secret_key.public_key());
+    // let joining_running_session = !nodes.contains_key(&secret_key.public());
+    // For now assume we are always joining or starting based on some other logic, or just let vertex handle it?
+    // tashi-vertex handle this via initial peers.
+    let _joining_running_session = false; // TODO: restore logic
 
-    let mut tce_config = tashi_consensus_engine::Config::new(secret_key);
-
-    tce_config
-        .initial_nodes(nodes.into_iter().collect())
-        .enable_hole_punching(false)
-        // TODO: we can dispatch messages before they come to consensus
-        // but we need to make sure we don't duplicate PUBLISHes.
-        // .report_events_before_consensus(true)
-        // Since a FoxMQ cluster is permissioned, don't kick failed nodes which may later recover.
-        .fallen_behind_kick_seconds(None);
-
-    if let Some(cert_path) = &config.cluster_cert {
-        tce_config.tls_cert_chain(Certificate::load_chain_from(cert_path)?);
+    let options = Options::new();
+    
+    // Add initial peers
+    let mut initial_peers = Vec::new();
+    for address in &addresses.addresses {
+        let addr: SocketAddr = address.addr.to_string().parse().expect("invalid socket address");
+        initial_peers.push((address.key.clone(), addr));
     }
 
+    if let Some(_cert_path) = &config.cluster_cert {
+         // TODO: handle certs in tashi-vertex
+         // options.tls_cert_chain(Certificate::load_chain_from(cert_path)?);
+    }
+
+    /*
     let roots = if let Some(root_cert_path) = &config.cluster_root_cert {
         let roots = Arc::new(RootCertificates::read_from(root_cert_path)?);
         tce_config.tls_roots(roots.clone());
@@ -367,7 +396,9 @@ fn create_tce_config(
     } else {
         None
     };
+    */
 
+    /*
     let (add_nodes_tx, add_nodes_rx) = mpsc::unbounded_channel();
 
     if config.cluster_accept_peer_with_cert {
@@ -385,20 +416,21 @@ fn create_tce_config(
             Ok(UnknownConnectionAction::VoteToAddPeer)
         });
     }
+    */
 
     Ok(TceConfig {
-        config: tce_config,
-        roots,
-        add_nodes: add_nodes_rx,
-        joining_running_session,
+        options,
+        secret_key: secret_key.clone(),
+        _joining_running_session,
+        initial_peers,
     })
 }
 
 /// NOTE: uses blocking I/O internally.
-fn read_secret_key(path: &Path) -> crate::Result<SecretKey> {
+fn read_secret_key(path: &Path) -> crate::Result<KeySecret> {
     // There's no benefit to using `tokio::fs` because it just does the blocking work on a background thread.
     let pem = std::fs::read(path).wrap_err_with(|| format!("error reading {}", path.display()))?;
 
-    SecretKey::from_pem(&pem)
+    KeySecret::from_der(&pem)
         .wrap_err_with(|| format!("error reading P-256 secret key from {}", path.display()))
 }

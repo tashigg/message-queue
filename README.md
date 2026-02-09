@@ -1,6 +1,9 @@
 # foxmq
 Message queue MeshApp utilizing Tashi Consensus Engine
 
+### Quick Start
+See [example.md](example.md) for a step-by-step guide on running and testing the message queue in WSL.
+
 ### Checking Out
 
 When checking out, be sure to initialize and update submodules:

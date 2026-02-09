@@ -9,7 +9,7 @@ use std::collections::{btree_map, BTreeMap};
 use std::mem;
 use std::ops::Bound;
 use std::sync::Arc;
-use tashi_consensus_engine::Timestamp;
+pub type Timestamp = u64;
 
 slotmap::new_key_type! { struct MessageIndex; }
 

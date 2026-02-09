@@ -16,9 +16,8 @@ edition = "2021"
 publish = false
 default-run = "foxmq"
 
-[dependencies.tashi-consensus-engine]
-git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
-rev = "aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
+[dependencies.tashi-vertex]
+path = "../tashi-vertex-rs"
 
 [dependencies]
 fnv = "1.0.7"
@@ -36,8 +35,8 @@ serde = { version = "1.0.196", features = ["derive", "std"] }
 thiserror = "1.0.56"
 toml = { version = "0.8.10", features = ["parse"] }
 tracing = { version = "0.1.40", features = ["attributes"] }
-tokio-util = "0.7.10"
-der = { version = "0.7.9", features = ["derive"] }
+tokio-util = { version = "0.7.10", features = ["time"] }
+der = { version = "0.7.9", features = ["derive", "alloc", "std"] }
 futures = { version = "0.3.30", features = ["std", "alloc"] }
 slotmap = "1.0.7"
 arbitrary = { version = "1", optional = true, features = ["derive"] }

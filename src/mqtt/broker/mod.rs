@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -16,10 +15,9 @@ use tokio_rustls::rustls;
 use tokio_util::sync::CancellationToken;
 
 use crate::collections::{hash_map, HashMap};
-use tashi_consensus_engine::{Platform, TxnPermit, TxnTryReserveError};
+use tashi_vertex::{Engine, Transaction as TvTransaction};
 
 use connection::Connection;
-use rumqttd_protocol::QoS;
 
 use crate::cli::run::WsConfig;
 use crate::config::permissions::PermissionsConfig;
@@ -85,8 +83,6 @@ pub struct MqttBroker {
 
     clients: Clients,
 
-    // this is a vecdeque just to make it fair, it doesn't really *have* to be one.
-    pending_wills: VecDeque<PendingWill>,
 
     /// Store information about a connection awaiting another connection to exit to take it over.
     ///
@@ -107,11 +103,6 @@ pub struct MqttBroker {
     router: MqttRouter,
 }
 
-struct PendingWill {
-    client_id: ClientId,
-    client_idx: ClientIndex,
-    will: Will,
-}
 
 struct SessionTakeover {
     client_id: ClientId,
@@ -153,7 +144,7 @@ struct Shared {
     password_hasher: PasswordHashingPool,
     users: UsersConfig,
     broker_tx: mpsc::Sender<BrokerEvent>,
-    tce_platform: Option<Arc<Platform>>,
+    engine: Option<Arc<Engine>>,
     router: RouterHandle,
 
     max_keep_alive: KeepAlive,
@@ -209,7 +200,7 @@ impl MqttBroker {
 
         let (broker_tx, broker_rx) = mpsc::channel(100);
 
-        let tce_platform = tce.as_ref().map(|tce| tce.platform.clone());
+        let engine = tce.as_ref().map(|tce| tce.engine.clone());
 
         let router = MqttRouter::start(tce, token.clone(), permissions_config);
 
@@ -220,7 +211,6 @@ impl MqttBroker {
             websocket,
             token,
             clients: Default::default(),
-            pending_wills: Default::default(),
             pending_session_takeovers: Default::default(),
             connections: SlotMap::with_capacity_and_key(256),
             tasks: JoinSet::new(),
@@ -230,7 +220,7 @@ impl MqttBroker {
                 ),
                 users,
                 broker_tx: broker_tx.clone(),
-                tce_platform,
+                engine,
                 router: router.handle(),
                 max_keep_alive,
             }),
@@ -246,15 +236,12 @@ impl MqttBroker {
         let mut shutdown = false;
 
         // hack: borrowck limitations means we'd have an overlapping borrow.
-        let tce_platform = self.shared.tce_platform.clone();
+        let _engine = self.shared.engine.clone();
 
         while !shutdown {
             let tls_accept_fut = OptionFuture::from(self.tls.as_mut().map(|it| it.accept()));
 
             let ws_accept_fut = OptionFuture::from(self.websocket.as_mut().map(|it| it.accept()));
-
-            let tce_platform_fut =
-                OptionFuture::from(tce_platform.as_ref().map(|k| k.reserve_tx()));
 
             tokio::select! {
                 _ = self.token.cancelled() => {
@@ -271,8 +258,7 @@ impl MqttBroker {
                     handle_connection_lost(
                         &mut self.inactive_sessions,
                         &mut self.router,
-                        self.shared.tce_platform.as_deref(),
-                        &mut self.pending_wills,
+                        self.shared.engine.as_deref(),
                         data
                     );
 
@@ -301,12 +287,6 @@ impl MqttBroker {
                 Some(event) = self.inactive_sessions.next_event() => {
                     self.handle_inactive_session_event(event)?;
                 }
-                Some(Ok(permit)) = tce_platform_fut, if !self.pending_wills.is_empty() => {
-                    // technically a bug if this fails, but it doesn't really matter.
-                    if let Some(will) = self.pending_wills.pop_front() {
-                        dispatch_will(&mut self.router, Some(permit), will.client_id, will.client_idx, will.will)
-                    }
-                }
             }
         }
 
@@ -330,8 +310,7 @@ impl MqttBroker {
                 if let Some(will) = session.last_will {
                     execute_will(
                         &mut self.router,
-                        self.shared.tce_platform.as_deref(),
-                        &mut self.pending_wills,
+                        self.shared.engine.as_deref(),
                         client_id,
                         client_idx,
                         will,
@@ -344,8 +323,7 @@ impl MqttBroker {
 
             super::session::Event::WillElapsed(_, will) => execute_will(
                 &mut self.router,
-                self.shared.tce_platform.as_deref(),
-                &mut self.pending_wills,
+                self.shared.engine.as_deref(),
                 client_id,
                 client_idx,
                 will,
@@ -408,8 +386,7 @@ impl MqttBroker {
                 if let Some(last_will) = store.session.last_will.take() {
                     execute_will(
                         &mut self.router,
-                        self.shared.tce_platform.as_deref(),
-                        &mut self.pending_wills,
+                        self.shared.engine.as_deref(),
                         client_id,
                         client_index,
                         last_will,
@@ -512,7 +489,6 @@ impl MqttBroker {
             mut tasks,
             mut inactive_sessions,
             mut router,
-            mut pending_wills,
             shared,
             ..
         } = self;
@@ -527,8 +503,7 @@ impl MqttBroker {
             handle_connection_lost(
                 &mut inactive_sessions,
                 &mut router,
-                shared.tce_platform.as_deref(),
-                &mut pending_wills,
+                shared.engine.as_deref(),
                 data,
             );
             tracing::info!("{} connections remaining", tasks.len());
@@ -656,8 +631,7 @@ impl Clients {
 fn handle_connection_lost(
     inactive_sessions: &mut InactiveSessions,
     router: &mut MqttRouter,
-    tce_platform: Option<&Platform>,
-    pending_wills: &mut VecDeque<PendingWill>,
+    engine: Option<&Engine>,
     data: ConnectionData,
 ) {
     let ConnectionData {
@@ -687,8 +661,7 @@ fn handle_connection_lost(
 
             execute_will(
                 router,
-                tce_platform,
-                pending_wills,
+                engine,
                 client_id,
                 client_index,
                 will,
@@ -697,30 +670,9 @@ fn handle_connection_lost(
     }
 }
 
-fn try_reserve_will(
-    tce_platform: &Platform,
-    client_id: ClientId,
-    qos: QoS,
-) -> Result<Option<TxnPermit<'_>>, ()> {
-    match tce_platform.try_reserve_tx() {
-        Ok(reservation) => Ok(Some(reservation)),
-        Err(TxnTryReserveError::Closed) => {
-            // We need to keep platform around until the broker shuts down... Or we need to store the wills.
-            // Currently we do neither, and plan on doing the first one.
-            tracing::error!(%client_id, "Failed to send will due to platform shut down");
-            Ok(None)
-        }
-        // we can ignore QoS 0 messages if our buffers are full (and this counts).
-        Err(TxnTryReserveError::Full) if matches!(qos, QoS::AtMostOnce) => {
-            tracing::debug!("Ignoring QoS 0 will due to full load");
-            Ok(None)
-        }
-        Err(TxnTryReserveError::Full) => Err(()),
-    }
-}
 fn dispatch_will(
     router: &mut MqttRouter,
-    permit: Option<TxnPermit<'_>>,
+    engine: Option<&Engine>,
     client_id: ClientId,
     client_idx: ClientIndex,
     mut will: Will,
@@ -730,55 +682,41 @@ fn dispatch_will(
     tracing::trace!("submitting transaction: {:?}", will.transaction);
 
     let transaction = Transaction {
-        data: TransactionData::Publish(will.transaction),
+        data: TransactionData::Publish(will.transaction.clone()),
     };
 
-    let txn = match transaction
-        .to_der()
-        .map_err(Into::into)
-        .and_then(TryInto::try_into)
-    {
-        Ok(txn) => txn,
-        Err(err) => {
-            tracing::warn!(%client_id, "expiring client will invalid {err}");
-            // don't kill the broker.
-            return;
+
+    if let Some(engine) = engine {
+        match create_tv_transaction(&transaction) {
+            Ok(tv_txn) => {
+                if let Err(e) = engine.send_transaction(tv_txn) {
+                     tracing::error!(%client_id, "Failed to submit will transaction: {e}");
+                }
+            }
+            Err(e) => {
+                 tracing::error!(%client_id, "Failed to encode will transaction: {e}");
+            }
         }
-    };
-
-    if let Some(permit) = permit {
-        permit.send(txn);
     }
 
-    let TransactionData::Publish(transaction) = transaction.data else {
-        unreachable!()
-    };
+    let TransactionData::Publish(transaction) = transaction.data;
 
     router.publish_will(client_idx, transaction);
 }
 
+fn create_tv_transaction(txn: &Transaction) -> crate::Result<TvTransaction> {
+    let der = txn.to_der().map_err(Into::<color_eyre::Report>::into)?;
+    let mut tv_txn = TvTransaction::allocate(der.len());
+    tv_txn.copy_from_slice(&der);
+    Ok(tv_txn)
+}
+
 fn execute_will(
     router: &mut MqttRouter,
-    tce_platform: Option<&Platform>,
-    pending_wills: &mut VecDeque<PendingWill>,
+    engine: Option<&Engine>,
     client_id: ClientId,
     client_idx: ClientIndex,
     will: Will,
 ) {
-    match tce_platform {
-        Some(tce_platform) => {
-            match try_reserve_will(tce_platform, client_id, will.transaction.meta.qos()) {
-                Ok(None) => {}
-                Ok(Some(permit)) => {
-                    dispatch_will(router, Some(permit), client_id, client_idx, will)
-                }
-                Err(()) => pending_wills.push_back(PendingWill {
-                    client_id,
-                    client_idx,
-                    will,
-                }),
-            };
-        }
-        None => dispatch_will(router, None, client_id, client_idx, will),
-    }
+    dispatch_will(router, engine, client_id, client_idx, will)
 }

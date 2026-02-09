@@ -15,7 +15,7 @@ use bytes::BytesMut;
 use color_eyre::eyre;
 use color_eyre::eyre::WrapErr;
 use futures::{SinkExt, TryStreamExt};
-use tashi_consensus_engine::flatten_task_result;
+use crate::flatten_task_result;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;

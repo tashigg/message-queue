@@ -76,7 +76,7 @@ impl InactiveSessions {
     pub async fn next_event(&mut self) -> Option<Event> {
         tokio::select! {
             Some(client_id) = self.expirations.next() => {
-                let client_id = client_id.into_inner();
+                let client_id: ClientId = client_id.into_inner();
                 let inactive = self
                     .sessions
                     .remove(&client_id)
@@ -91,7 +91,7 @@ impl InactiveSessions {
                 Some(Event::Expiration(client_id, inactive.session.session))
             },
             Some(client_id) = self.will_expirations.next() => {
-               let client_id = client_id.into_inner();
+               let client_id: ClientId = client_id.into_inner();
                // this happening implies a non-local bug, it isn't trivial to ignore (it would require having the event polling be in a loop so that this could be skipped... Which would be reasonable if it wasn't already a bug)
                let inactive = self.sessions.get_mut(&client_id).expect("BUG: will expiration not removed when session expired/claimed");
                let will = inactive.session.session.last_will.take().expect("BUG: Will claimed and not removed");
