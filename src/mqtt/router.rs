@@ -28,8 +28,8 @@ use crate::mqtt::retain::RetainedMessages;
 use crate::mqtt::trie::{self, Filter, FilterTrie, TopicName};
 use crate::mqtt::{ClientId, ClientIndex, ConnectionId};
 use crate::transaction::{
-    BytesAsOctetString, PublishMeta, PublishTrasaction, TimestampSeconds,
-    Transaction, TransactionData,
+    BytesAsOctetString, PublishMeta, PublishTrasaction, TimestampSeconds, Transaction,
+    TransactionData,
 };
 
 // Tokio's channels allocate in slabs of 32.
@@ -540,9 +540,7 @@ async fn run(mut state: RouterState) -> crate::Result<()> {
 
         if let Some(tce) = &state.tce {
             let engine = tce.engine.clone();
-            tce_msg_fut = Some(async move {
-                engine.recv_message().await
-            }).into();
+            tce_msg_fut = Some(async move { engine.recv_message().await }).into();
         }
 
         tokio::select! {
@@ -842,12 +840,12 @@ fn handle_tashi_event(state: &mut RouterState, event: Event) {
                 // FIXME: we need a way to check if we created this event to avoid re-dispatching
                 // local messages.
                 // if event.creator() != platform.creator_id() {
-                    // Locally sent messages would have been dispatched directly
-                    dispatch(
-                        state,
-                        publish.clone(),
-                        PublishOrigin::Consensus(event.creator()),
-                    );
+                // Locally sent messages would have been dispatched directly
+                dispatch(
+                    state,
+                    publish.clone(),
+                    PublishOrigin::Consensus(event.creator()),
+                );
                 // }
 
                 // Only for TCE messages because we need to have total ordering
@@ -906,7 +904,7 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
 /*
 #[tracing::instrument(skip_all, fields(key=%add_node.key, addr=%add_node.socket_addr.0, from_consensus))]
 fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_consensus: bool) {
-  
+
 }
 */
 
@@ -1112,7 +1110,7 @@ pub fn system_publish(topic: impl Into<String>, message: impl Into<Bytes>) {
 //                    return;
 //                }
 //            };
-// 
+//
 //            match txn.data {
 //                 TransactionData::Publish(publish) => {
 //                     dispatch(state, publish.into(), PublishOrigin::Consensus(&creator));

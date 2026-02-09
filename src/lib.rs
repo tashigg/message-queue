@@ -11,9 +11,7 @@ pub fn map_join_error(e: tokio::task::JoinError) -> Error {
     }
 }
 
-pub fn flatten_task_result<T>(
-    res: Result<Result<T, Error>, tokio::task::JoinError>,
-) -> Result<T> {
+pub fn flatten_task_result<T>(res: Result<Result<T, Error>, tokio::task::JoinError>) -> Result<T> {
     match res {
         Ok(Ok(val)) => Ok(val),
         Ok(Err(err)) => Err(err),

@@ -1546,12 +1546,11 @@ checksum = "a7065abeca94b6a8a577f9bd45aa0867a2238b74e8eb67cf10d492bc39351394"
 [[package]]
 name = "tashi-vertex"
 version = "0.1.0"
+source = "git+ssh://git@github.com/tashigg/tashi-vertex-rs.git?branch=main#d4a80ec3a6b38cbd498519b10993f8c9b076e726"
 dependencies = [
  "anyhow",
  "cmake",
  "copy_to_output",
- "der",
- "serde",
 ]
 
 [[package]]

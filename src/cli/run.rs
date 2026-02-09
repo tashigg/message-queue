@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use tashi_vertex::{KeySecret, KeyPublic, Options};
+use tashi_vertex::{KeyPublic, KeySecret, Options};
 use tokio_rustls::rustls;
 
 #[derive(clap::Args, Clone, Debug)]
@@ -182,7 +182,7 @@ impl SecretKeyOpt {
             // If that fails, treat it as a file path
             let content = std::fs::read_to_string(key_input)
                 .wrap_err_with(|| format!("failed to read secret key file: {key_input}"))?;
-            
+
             return KeySecret::from_str(content.trim())
                 .wrap_err("failed to parse secret key from file");
         }
@@ -289,18 +289,21 @@ async fn main_async(
 ) -> crate::Result<()> {
     let tce = match tce_config {
         Some(tce_config) => {
-            let context = Arc::new(tashi_vertex::Context::new().wrap_err("failed to create context")?);
+            let context =
+                Arc::new(tashi_vertex::Context::new().wrap_err("failed to create context")?);
             let socket = tashi_vertex::Socket::bind(&context, &args.cluster_addr.to_string())
                 .await
                 .wrap_err("failed to bind cluster socket")?;
             let mut peers = tashi_vertex::Peers::new().wrap_err("failed to create peers")?;
 
             for (key, addr) in tce_config.initial_peers {
-                peers.insert(
-                    &addr.to_string(),
-                    &key,
-                    tashi_vertex::PeerCapabilities::default(),
-                ).wrap_err("failed to add initial peer")?;
+                peers
+                    .insert(
+                        &addr.to_string(),
+                        &key,
+                        tashi_vertex::PeerCapabilities::default(),
+                    )
+                    .wrap_err("failed to add initial peer")?;
             }
 
             let engine = tashi_vertex::Engine::start(
@@ -309,7 +312,8 @@ async fn main_async(
                 tce_config.options,
                 &tce_config.secret_key,
                 peers,
-            ).wrap_err("failed to start engine")?;
+            )
+            .wrap_err("failed to start engine")?;
 
             Some(TceState {
                 engine: Arc::new(engine),
@@ -375,17 +379,21 @@ fn create_tce_config(
     let _joining_running_session = false; // TODO: restore logic
 
     let options = Options::new();
-    
+
     // Add initial peers
     let mut initial_peers = Vec::new();
     for address in &addresses.addresses {
-        let addr: SocketAddr = address.addr.to_string().parse().expect("invalid socket address");
+        let addr: SocketAddr = address
+            .addr
+            .to_string()
+            .parse()
+            .expect("invalid socket address");
         initial_peers.push((address.key.clone(), addr));
     }
 
     if let Some(_cert_path) = &config.cluster_cert {
-         // TODO: handle certs in tashi-vertex
-         // options.tls_cert_chain(Certificate::load_chain_from(cert_path)?);
+        // TODO: handle certs in tashi-vertex
+        // options.tls_cert_chain(Certificate::load_chain_from(cert_path)?);
     }
 
     /*

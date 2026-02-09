@@ -83,7 +83,6 @@ pub struct MqttBroker {
 
     clients: Clients,
 
-
     /// Store information about a connection awaiting another connection to exit to take it over.
     ///
     /// When `key` closes out, `value` takes over the session immediately,
@@ -102,7 +101,6 @@ pub struct MqttBroker {
 
     router: MqttRouter,
 }
-
 
 struct SessionTakeover {
     client_id: ClientId,
@@ -659,13 +657,7 @@ fn handle_connection_lost(
                 return;
             };
 
-            execute_will(
-                router,
-                engine,
-                client_id,
-                client_index,
-                will,
-            )
+            execute_will(router, engine, client_id, client_index, will)
         }
     }
 }
@@ -685,16 +677,15 @@ fn dispatch_will(
         data: TransactionData::Publish(will.transaction.clone()),
     };
 
-
     if let Some(engine) = engine {
         match create_tv_transaction(&transaction) {
             Ok(tv_txn) => {
                 if let Err(e) = engine.send_transaction(tv_txn) {
-                     tracing::error!(%client_id, "Failed to submit will transaction: {e}");
+                    tracing::error!(%client_id, "Failed to submit will transaction: {e}");
                 }
             }
             Err(e) => {
-                 tracing::error!(%client_id, "Failed to encode will transaction: {e}");
+                tracing::error!(%client_id, "Failed to encode will transaction: {e}");
             }
         }
     }
