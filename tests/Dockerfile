@@ -1,5 +1,7 @@
 FROM rust:1-bookworm
 
+RUN apt-get update && apt-get install -y cmake build-essential && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /home/foxmq
 
 # The minimum number of files required to allow `cargo fetch` to cache all dependencies.
@@ -31,7 +33,7 @@ RUN --mount=type=ssh --mount=target=docker-util/,source=docker-util/ bash docker
 RUN --mount=type=ssh cargo fetch
 
 # Build the biggest deps in a separately cached layer.
-RUN cargo build --release -p tokio -p tracing -p tashi-consensus-engine
+RUN cargo build --release -p tokio -p tracing -p tashi-vertex
 
 COPY ./ .
 

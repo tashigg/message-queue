@@ -17,7 +17,8 @@ publish = false
 default-run = "foxmq"
 
 [dependencies.tashi-vertex]
-path = "../tashi-vertex-rs"
+git = "https://github.com/tashigg/tashi-vertex-rs.git"
+branch = "main"
 
 [dependencies]
 fnv = "1.0.7"
