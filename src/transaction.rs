@@ -18,8 +18,6 @@ pub struct Transaction {
 pub enum TransactionData {
     #[asn1(context_specific = "2", constructed = "true")]
     Publish(PublishTrasaction),
-    // #[asn1(context_specific = "3", constructed = "true")]
-    // AddNode(AddNodeTransaction),
 }
 
 // Transcoding to DER was chosen so that we are not baking-in a specific version of the MQTT protocol.
@@ -77,16 +75,6 @@ pub struct PublishTransactionProperties {
     pub user_properties: Option<UserProperties>,
 }
 
-/*
-/*
-#[derive(der::Sequence, Debug, PartialEq, Eq)]
-pub struct AddNodeTransaction {
-    pub socket_addr: Endpoint,
-    pub key: PublicKey,
-    pub certs: Vec<Certificate>,
-}
-*/
-*/
 
 /*
 impl TryFrom<Transaction> for tashi_consensus_engine::ApplicationTransaction {

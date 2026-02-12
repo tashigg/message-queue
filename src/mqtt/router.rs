@@ -901,12 +901,6 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
     }
 }
 
-/*
-#[tracing::instrument(skip_all, fields(key=%add_node.key, addr=%add_node.socket_addr.0, from_consensus))]
-fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_consensus: bool) {
-
-}
-*/
 
 // `PublishTransaction` wrapped in `Arc` for cheap clones.
 // This is a potential candidate for `triomphe::Arc` but `PublishTransaction` is so large
@@ -1099,25 +1093,3 @@ pub fn system_publish(topic: impl Into<String>, message: impl Into<Bytes>) {
     }
 }
 
-// fn handle_tashi_event(state: &mut RouterState, event: tashi_vertex::Event) {
-//    match event {
-//        tashi_vertex::Event::Consensus { transaction, creator, timestamp: _ } => {
-//            // Parse transaction
-//            let txn = match Transaction::from_der(transaction.as_ref()) {
-//                Ok(txn) => txn,
-//                Err(e) => {
-//                    tracing::warn!("Failed to parse consensus transaction: {}", e);
-//                    return;
-//                }
-//            };
-//
-//            match txn.data {
-//                 TransactionData::Publish(publish) => {
-//                     dispatch(state, publish.into(), PublishOrigin::Consensus(&creator));
-//                 }
-//                 // TransactionData::AddNode(_) => {} // Disabled
-//            }
-//        }
-//        _ => {}
-//    }
-// }
