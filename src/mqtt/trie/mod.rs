@@ -336,7 +336,7 @@ impl<'a, T: 'a> IdEntry<'a, T> {
         }
 
         Some(remove_entry(self.entry_id(), self.nodes, |node| {
-            node.leaf_data.all(&mut empty)
+            node.filters.is_empty() && node.leaf_data.all(&mut empty)
         }))
     }
 
