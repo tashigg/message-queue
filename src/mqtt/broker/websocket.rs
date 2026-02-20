@@ -2,6 +2,7 @@ use std::mem;
 use std::net::{IpAddr, SocketAddr};
 use std::str;
 
+use crate::flatten_task_result;
 use axum::async_trait;
 use axum::extract::rejection::ExtensionRejection;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
@@ -15,7 +16,6 @@ use bytes::BytesMut;
 use color_eyre::eyre;
 use color_eyre::eyre::WrapErr;
 use futures::{SinkExt, TryStreamExt};
-use tashi_consensus_engine::flatten_task_result;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;

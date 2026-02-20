@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::path::Path;
 
-use tashi_consensus_engine::PublicKey;
+use tashi_vertex::KeyPublic;
 
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Addresses {
@@ -10,7 +10,7 @@ pub struct Addresses {
 
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Address {
-    pub key: PublicKey,
+    pub key: KeyPublic,
     pub addr: SocketAddr,
 }
 

@@ -5,8 +5,8 @@ use bytes::Bytes;
 use der::asn1::{BitStringRef, OctetString, OctetStringRef, Utf8StringRef};
 use der::{Decode, Encode, Header, Length, Reader, Tag, TagNumber, Writer};
 use rumqttd_protocol::QoS;
-use tashi_consensus_engine::protocol::Endpoint;
-use tashi_consensus_engine::{Certificate, PublicKey};
+// use tashi_consensus_engine::protocol::Endpoint;
+// use tashi_consensus_engine::{Certificate, PublicKey};
 
 #[derive(der::Sequence, Debug)]
 pub struct Transaction {
@@ -18,13 +18,11 @@ pub struct Transaction {
 pub enum TransactionData {
     #[asn1(context_specific = "2", constructed = "true")]
     Publish(PublishTrasaction),
-    #[asn1(context_specific = "3", constructed = "true")]
-    AddNode(AddNodeTransaction),
 }
 
 // Transcoding to DER was chosen so that we are not baking-in a specific version of the MQTT protocol.
 /// DER mapping of [`rumqttd::protocol::Packet::Publish`].
-#[derive(der::Sequence, Debug, PartialEq, Eq)]
+#[derive(der::Sequence, Debug, PartialEq, Eq, Clone)]
 pub struct PublishTrasaction {
     pub topic: String,
     pub meta: PublishMeta,
@@ -46,7 +44,7 @@ pub struct PublishTrasaction {
 ///
 /// `topic_alias` and `subscription_identifiers` are omitted as they are only used between
 /// a client and a broker.
-#[derive(der::Sequence, Debug, PartialEq, Eq)]
+#[derive(der::Sequence, Debug, PartialEq, Eq, Clone)]
 pub struct PublishTransactionProperties {
     // Note: these match the tag bytes used by the MQTT protocol, where possible.
     #[asn1(context_specific = "1", optional = "true")]
@@ -77,13 +75,8 @@ pub struct PublishTransactionProperties {
     pub user_properties: Option<UserProperties>,
 }
 
-#[derive(der::Sequence, Debug, PartialEq, Eq)]
-pub struct AddNodeTransaction {
-    pub socket_addr: Endpoint,
-    pub key: PublicKey,
-    pub certs: Vec<Certificate>,
-}
 
+/*
 impl TryFrom<Transaction> for tashi_consensus_engine::ApplicationTransaction {
     type Error = color_eyre::eyre::Error;
 
@@ -91,6 +84,7 @@ impl TryFrom<Transaction> for tashi_consensus_engine::ApplicationTransaction {
         value.to_der()?.try_into()
     }
 }
+*/
 
 // Layout:
 // 7 dup (1 bit)
