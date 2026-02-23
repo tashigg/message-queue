@@ -75,7 +75,6 @@ pub struct PublishTransactionProperties {
     pub user_properties: Option<UserProperties>,
 }
 
-
 /*
 impl TryFrom<Transaction> for tashi_consensus_engine::ApplicationTransaction {
     type Error = color_eyre::eyre::Error;

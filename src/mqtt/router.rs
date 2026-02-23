@@ -901,7 +901,6 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
     }
 }
 
-
 // `PublishTransaction` wrapped in `Arc` for cheap clones.
 // This is a potential candidate for `triomphe::Arc` but `PublishTransaction` is so large
 // that it dwarfs the extra machine word for the weak count.
@@ -1092,4 +1091,3 @@ pub fn system_publish(topic: impl Into<String>, message: impl Into<Bytes>) {
         );
     }
 }
-
