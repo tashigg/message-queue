@@ -718,26 +718,28 @@ impl<S: MqttSocket> Connection<S> {
 
         tracing::trace!("submitting transaction: {transaction:?}");
 
-        if let Some(tce_platform) = &self.shared.tce_platform {
-            tce_platform
-                .reserve_tx()
-                .await
-                // If this fails, we'll drop the connection without sending a PUBACK/PUBREC,
-                // so the client will know we died before taking ownership and can try another broker.
-                .or_else(|_| disconnect!(ServerShuttingDown, "broker shutting down"))?
-                .send(
-                    transaction
-                        .to_der()
-                        .map_err(Into::into)
-                        .and_then(|it| it.try_into())
-                        .or_else(|e| {
-                            tracing::error!(?transaction, ?e, "failed to encode transaction");
-                            disconnect!(
-                                ProtocolError,
-                                "PUBLISH exceeded consensus protocol size limit"
-                            );
-                        })?,
-                );
+        if let Some(engine) = &self.shared.engine {
+            // Encode the transaction to DER
+            let der = transaction.to_der().map_err(|e| {
+                tracing::error!(?transaction, ?e, "failed to encode transaction");
+                ConnectionError::Disconnect {
+                    reason: DisconnectReasonCode::UnspecifiedError,
+                    message: "failed to encode transaction".into(),
+                }
+            })?;
+
+            // Create a tashi-vertex transaction
+            let mut vertex_txn = tashi_vertex::Transaction::allocate(der.len());
+            vertex_txn.copy_from_slice(&der);
+
+            // Send it
+            engine.send_transaction(vertex_txn).map_err(|e| {
+                tracing::error!(?e, "failed to submit transaction to tashi-vertex");
+                ConnectionError::Disconnect {
+                    reason: DisconnectReasonCode::ServerShuttingDown,
+                    message: "broker shutting down".into(),
+                }
+            })?;
         }
 
         router.transaction(transaction).await;

@@ -3,7 +3,21 @@ use color_eyre::eyre::WrapErr;
 pub use color_eyre::eyre::{Error, Result};
 use tracing_subscriber::EnvFilter;
 
-pub use tashi_consensus_engine::{flatten_task_result, map_join_error};
+pub fn map_join_error(e: tokio::task::JoinError) -> Error {
+    if e.is_cancelled() {
+        eyre!("task cancelled")
+    } else {
+        eyre!(e).wrap_err("task panicked")
+    }
+}
+
+pub fn flatten_task_result<T>(res: Result<Result<T, Error>, tokio::task::JoinError>) -> Result<T> {
+    match res {
+        Ok(Ok(val)) => Ok(val),
+        Ok(Err(err)) => Err(err),
+        Err(e) => Err(map_join_error(e)),
+    }
+}
 
 use crate::cli::LogFormat;
 

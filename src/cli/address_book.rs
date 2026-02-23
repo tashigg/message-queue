@@ -6,7 +6,7 @@ use std::{fs, io};
 use color_eyre::eyre;
 use color_eyre::eyre::{eyre, WrapErr};
 use serde::Serialize;
-use tashi_consensus_engine::SecretKey;
+use tashi_vertex::KeySecret;
 
 use crate::cli::LogFormat;
 use crate::collections::HashSet;
@@ -150,15 +150,15 @@ fn generate_address_book(
     for (i, address) in addresses.enumerate() {
         eyre::ensure!(address_set.insert(address), "Duplicate address: {address}");
 
-        let key = SecretKey::generate();
-        let pubkey = key.public_key();
+        let key = KeySecret::generate();
+        let pubkey = key.public();
 
-        let pem = key.to_pem();
+        let key_str = key.to_string();
 
-        let pem_filename = format!("key_{i}.pem");
+        let pem_filename = format!("key_{i}.key");
         let pem_path = output_dir.join(&pem_filename);
 
-        write_new_file(&pem_path, pem, force)?;
+        write_new_file(&pem_path, key_str, force)?;
 
         // Mark each entry with a comment referencing its key file.
         writeln!(address_book, "# {pem_filename}").expect("writing to a String cannot fail");
