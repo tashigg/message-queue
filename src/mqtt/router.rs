@@ -628,9 +628,12 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
             );
         }
         RouterCommand::Transaction(txn) => match txn.data {
-            TransactionData::Publish(publish) => {
-                dispatch(state, publish.into(), PublishOrigin::Local(client_idx), None)
-            }
+            TransactionData::Publish(publish) => dispatch(
+                state,
+                publish.into(),
+                PublishOrigin::Local(client_idx),
+                None,
+            ),
             TransactionData::AddNode(add_node) => {
                 // This really shouldn't be called from here, but there's little harm in doing it.
                 handle_add_node(state, add_node, false);
@@ -742,8 +745,7 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
                         state.retained_messages.visit_matches(
                             sub_entry.filter(),
                             |timestamp, index, publish| {
-                                let consensus_timestamp =
-                                    state.tce.as_ref().map(|_| timestamp);
+                                let consensus_timestamp = state.tce.as_ref().map(|_| timestamp);
                                 let entry = retained_messages
                                     .entry((timestamp, index))
                                     .or_insert_with(|| RetainedMessage {
@@ -916,7 +918,12 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
         SystemCommand::PublishWill {
             txn,
             willing_client,
-        } => dispatch(state, txn.into(), PublishOrigin::Local(willing_client), None),
+        } => dispatch(
+            state,
+            txn.into(),
+            PublishOrigin::Local(willing_client),
+            None,
+        ),
 
         SystemCommand::EvictClient { client_index } => {
             state.evict_client(client_index);
