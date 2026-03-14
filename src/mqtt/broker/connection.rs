@@ -418,6 +418,7 @@ impl<S: MqttSocket> Connection<S> {
                 Some(mail.packet_id),
                 &mail.subscription_ids,
                 mail.include_broker_timestamps,
+                mail.consensus_timestamp,
             ))
             .await?;
 
@@ -431,6 +432,7 @@ impl<S: MqttSocket> Connection<S> {
                 None,
                 mail.subscription_ids(),
                 mail.include_broker_timestamps,
+                mail.consensus_timestamp,
             ))
             .await?;
         }

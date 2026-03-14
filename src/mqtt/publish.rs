@@ -353,6 +353,7 @@ pub fn txn_to_packet(
     packet_id: Option<PacketId>,
     sub_ids: &[SubscriptionId],
     include_broker_timestamps: bool,
+    consensus_timestamp: Option<u64>,
 ) -> Packet {
     Packet::Publish(
         Publish::with_all(
@@ -383,7 +384,14 @@ pub fn txn_to_packet(
                     .format(&Rfc3339)
                     .expect("formatting error");
 
-                user_properties.push(("timestamp_received".to_owned(), timestamp_received))
+                user_properties.push(("timestamp_received".to_owned(), timestamp_received));
+
+                if let Some(consensus_nanos) = consensus_timestamp {
+                    user_properties.push((
+                        "consensus_timestamp".to_owned(),
+                        consensus_nanos.to_string(),
+                    ));
+                }
             }
 
             PublishProperties {

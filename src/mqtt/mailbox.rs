@@ -59,6 +59,7 @@ pub struct OrderedMail {
     pub subscription_ids: Vec<SubscriptionId>,
     pub publish: Arc<PublishTrasaction>,
     pub include_broker_timestamps: bool,
+    pub consensus_timestamp: Option<u64>,
 }
 
 /// A QoS 0 PUBLISH.
@@ -68,6 +69,7 @@ pub struct UnorderedMail {
     pub kind: UnorderedMailKind,
     pub publish: Arc<PublishTrasaction>,
     pub include_broker_timestamps: bool,
+    pub consensus_timestamp: Option<u64>,
 }
 
 /// A compact way to represent the RETAIN flag for a QoS 0 publish.
@@ -102,6 +104,7 @@ struct Delivery {
     delivery_meta: PublishMeta,
     sub_id: Option<SubscriptionId>,
     include_broker_timestamps: bool,
+    consensus_timestamp: Option<u64>,
     publish: Arc<PublishTrasaction>,
 }
 
@@ -159,6 +162,7 @@ impl MailSender {
         retain: bool,
         sub_id: Option<SubscriptionId>,
         include_broker_timestamps: bool,
+        consensus_timestamp: Option<u64>,
         publish: Arc<PublishTrasaction>,
     ) -> bool {
         let effective_qos = cmp::min(subscription_qos, publish.meta.qos());
@@ -179,6 +183,7 @@ impl MailSender {
                 delivery_meta: PublishMeta::new(effective_qos, retain, false),
                 sub_id,
                 include_broker_timestamps,
+                consensus_timestamp,
                 publish,
             })
             .is_ok()
@@ -245,6 +250,7 @@ impl OpenMailbox<'_> {
             kind: UnorderedMailKind::NotRetained { subscription_ids },
             publish,
             include_broker_timestamps: _,
+            consensus_timestamp: _,
         }) = self.unordered_mail.back_mut()
         {
             // If this is a duplicate delivery, coalesce into one PUBLISH.
@@ -273,6 +279,7 @@ impl OpenMailbox<'_> {
             },
             publish: delivery.publish,
             include_broker_timestamps: delivery.include_broker_timestamps,
+            consensus_timestamp: delivery.consensus_timestamp,
         });
     }
 
@@ -314,6 +321,7 @@ impl OpenMailbox<'_> {
             subscription_ids: Vec::from_iter(delivery.sub_id),
             publish: delivery.publish,
             include_broker_timestamps: delivery.include_broker_timestamps,
+            consensus_timestamp: delivery.consensus_timestamp,
         });
     }
 
