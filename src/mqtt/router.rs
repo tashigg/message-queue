@@ -684,6 +684,7 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
 fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: SubscribeRequest) {
     struct RetainedMessage {
         filter_qos: QoS,
+        consensus_timestamp: Option<u64>,
         publish: Arc<PublishTrasaction>,
     }
 
@@ -741,10 +742,13 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
                         state.retained_messages.visit_matches(
                             sub_entry.filter(),
                             |timestamp, index, publish| {
+                                let consensus_timestamp =
+                                    state.tce.as_ref().map(|_| timestamp);
                                 let entry = retained_messages
                                     .entry((timestamp, index))
                                     .or_insert_with(|| RetainedMessage {
                                         filter_qos,
+                                        consensus_timestamp,
                                         publish: publish.clone(),
                                     });
 
@@ -795,7 +799,7 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
             true,
             request.sub_id,
             request.include_broker_timestamps,
-            None,
+            message.consensus_timestamp,
             message.publish,
         );
 
