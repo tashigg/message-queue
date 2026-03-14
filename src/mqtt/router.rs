@@ -629,7 +629,12 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
         }
         RouterCommand::Transaction(txn) => match txn.data {
             TransactionData::Publish(publish) => {
-                dispatch(state, publish.into(), PublishOrigin::Local(client_idx))
+                // When TCE is active, don't dispatch locally — wait for the
+                // message to come back through consensus so that all clients
+                // see messages in the same total order.
+                if state.tce.is_none() {
+                    dispatch(state, publish.into(), PublishOrigin::Local(client_idx));
+                }
             }
             TransactionData::AddNode(add_node) => {
                 // This really shouldn't be called from here, but there's little harm in doing it.
@@ -851,14 +856,13 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Pl
             TransactionData::Publish(publish) => {
                 let publish = Arc::new(publish);
 
-                if &event.creator != platform.creator_id() {
-                    // Locally sent messages would have been dispatched directly
-                    dispatch(
-                        state,
-                        publish.clone(),
-                        PublishOrigin::Consensus(&event.creator),
-                    );
-                }
+                // All messages (including our own) are dispatched from
+                // the consensus handler to guarantee total ordering.
+                dispatch(
+                    state,
+                    publish.clone(),
+                    PublishOrigin::Consensus(&event.creator),
+                );
 
                 // Only for TCE messages because we need to have total ordering
                 // to know which retained message is the latest for a given topic.
