@@ -388,7 +388,7 @@ pub fn txn_to_packet(
 
                 if let Some(consensus_nanos) = consensus_timestamp {
                     user_properties.push((
-                        "consensus_timestamp".to_owned(),
+                        "consensus_timestamp_ns".to_owned(),
                         consensus_nanos.to_string(),
                     ));
                 }
