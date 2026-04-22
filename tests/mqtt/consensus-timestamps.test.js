@@ -62,6 +62,15 @@ describe("Consensus Timestamps", () => {
             expect(m.props).toBeDefined();
             expect(m.props.userProperties).toBeDefined();
             expect(m.props.userProperties.timestamp_received).toBeDefined();
+            expect(m.props.userProperties.consensus_timestamp_ns).toBeDefined();
+
+            // Verify consensus_timestamp_ns is a valid nanosecond Unix epoch
+            const rawNs = BigInt(m.props.userProperties.consensus_timestamp_ns);
+            expect(rawNs).toBeGreaterThan(0n);
+
+            // Sanity check: should be a reasonable timestamp (after 2020-01-01 in nanos)
+            const year2020Ns = BigInt(1577836800) * 1000000000n;
+            expect(rawNs).toBeGreaterThan(year2020Ns);
 
             const currentTs = m.props.userProperties.timestamp_received;
             if (lastTimestamp !== "") {
@@ -70,7 +79,10 @@ describe("Consensus Timestamps", () => {
             lastTimestamp = currentTs;
         }
 
-        console.log("Timestamps verified:", messagesReceived.map(m => m.props.userProperties.timestamp_received));
+        console.log("Timestamps verified:", messagesReceived.map(m => ({
+            received: m.props.userProperties.timestamp_received,
+            consensus_ns: m.props.userProperties.consensus_timestamp_ns,
+        })));
 
         await subClient.endAsync();
         await pubClient.endAsync();

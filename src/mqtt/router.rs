@@ -633,7 +633,12 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
                 // message to come back through consensus so that all clients
                 // see messages in the same total order.
                 if state.tce.is_none() {
-                    dispatch(state, publish.into(), PublishOrigin::Local(client_idx));
+                    dispatch(
+                        state,
+                        publish.into(),
+                        PublishOrigin::Local(client_idx),
+                        None,
+                    );
                 }
             }
             TransactionData::AddNode(add_node) => {
@@ -689,6 +694,7 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
 fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: SubscribeRequest) {
     struct RetainedMessage {
         filter_qos: QoS,
+        consensus_timestamp: Option<u64>,
         publish: Arc<PublishTrasaction>,
     }
 
@@ -746,10 +752,12 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
                         state.retained_messages.visit_matches(
                             sub_entry.filter(),
                             |timestamp, index, publish| {
+                                let consensus_timestamp = state.tce.as_ref().map(|_| timestamp);
                                 let entry = retained_messages
                                     .entry((timestamp, index))
                                     .or_insert_with(|| RetainedMessage {
                                         filter_qos,
+                                        consensus_timestamp,
                                         publish: publish.clone(),
                                     });
 
@@ -800,6 +808,7 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
             true,
             request.sub_id,
             request.include_broker_timestamps,
+            message.consensus_timestamp,
             message.publish,
         );
 
@@ -861,6 +870,7 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
                     state,
                     publish.clone(),
                     PublishOrigin::Consensus(&event.creator),
+                    Some(consensus_timestamp),
                 );
 
                 // Only for TCE messages because we need to have total ordering
@@ -907,7 +917,7 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
         }
 
         SystemCommand::Publish { source, txn } => {
-            dispatch(state, txn.into(), PublishOrigin::System { source });
+            dispatch(state, txn.into(), PublishOrigin::System { source }, None);
         }
 
         SystemCommand::PublishWill {
@@ -922,7 +932,12 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
             // (for `clean_session=true`) and `dispatch()` returns early when it fails to
             // look up the client. The non-TCE path still needs this to deliver the will
             // locally.
-            dispatch(state, txn.into(), PublishOrigin::Local(willing_client))
+            dispatch(
+                state,
+                txn.into(),
+                PublishOrigin::Local(willing_client),
+                None,
+            )
         }
 
         SystemCommand::EvictClient { client_index } => {
@@ -992,7 +1007,12 @@ fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_c
 // `PublishTransaction` wrapped in `Arc` for cheap clones.
 // This is a potential candidate for `triomphe::Arc` but `PublishTransaction` is so large
 // that it dwarfs the extra machine word for the weak count.
-fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: PublishOrigin<'_>) {
+fn dispatch(
+    state: &mut RouterState,
+    publish: Arc<PublishTrasaction>,
+    origin: PublishOrigin<'_>,
+    consensus_timestamp: Option<u64>,
+) {
     // TODO: statically ensure `topic` is valid in `PublishTransaction`
     let topic = match TopicName::parse(&publish.topic) {
         Ok(topic) => topic,
@@ -1121,6 +1141,7 @@ fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: Pu
                 sub.props.preserve_retain && publish.meta.retain(),
                 sub.id,
                 sub.include_broker_timestamps,
+                consensus_timestamp,
                 publish.clone(),
             );
 
