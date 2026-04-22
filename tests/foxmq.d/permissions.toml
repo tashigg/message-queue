@@ -4,3 +4,10 @@ topic = [{ filter = "test_topic", allowed = ["publish"] }]
 
 [permissions.test_user2]
 topic = [{ filter = "test_topic", allowed = ["subscribe"] }]
+
+
+# Fallback rules for users that don't have their own entry (including anonymous logins).
+# Used by the "denied publish does not leak across the cluster" test — exercises that a
+# publish rejected by the ACL never reaches subscribers on remote brokers via TCE.
+[permissions."*"]
+topic = [{ filter = "blocked/#", allowed = ["subscribe"], denied = ["publish"] }]
