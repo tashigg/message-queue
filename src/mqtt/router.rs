@@ -82,7 +82,7 @@ impl MqttRouter {
     pub fn start(
         tce: Option<TceState>,
         token: CancellationToken,
-        permissions: PermissionsConfig,
+        permissions: Arc<PermissionsConfig>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
 
@@ -344,7 +344,7 @@ struct RouterState {
     clients: SecondaryMap<ClientIndex, ClientState>,
     dead_clients: HashSet<ClientIndex>,
 
-    permissions: PermissionsConfig,
+    permissions: Arc<PermissionsConfig>,
 
     subscriptions: Subscriptions,
     command_rx: mpsc::Receiver<(ClientIndex, RouterCommand)>,
@@ -810,8 +810,7 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
 }
 
 fn handle_message(state: &mut RouterState, message: Message) {
-    if let Some(tce) = state.tce.as_ref() {
-        let tce_platform = tce.platform.clone();
+    if state.tce.is_some() {
         match message {
             Message::SyncPoint(sync_point) => {
                 // TODO: handle sync points
@@ -819,14 +818,14 @@ fn handle_message(state: &mut RouterState, message: Message) {
                 tracing::debug!(?sync_point, "received sync point");
             }
             Message::Event(event) => {
-                handle_tce_event(state, event, &tce_platform);
+                handle_tce_event(state, event);
             }
         }
     }
 }
 
 #[tracing::instrument(skip_all, fields(creator=%event.creator, timestamp=event.timestamp_created()))]
-fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Platform) {
+fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
     let Some(consensus_timestamp) = event.timestamp_finalized else {
         return;
     };
@@ -914,7 +913,17 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
         SystemCommand::PublishWill {
             txn,
             willing_client,
-        } => dispatch(state, txn.into(), PublishOrigin::Local(willing_client)),
+        } => {
+            // When TCE is active this local dispatch is effectively a no-op: the will is
+            // delivered through the consensus path (see `handle_tce_event`) for all brokers
+            // in the cluster, including ours. `handle_connection_lost` in the broker task
+            // sends `SystemCommand::Disconnected` on this same `system_tx` channel *before*
+            // `SystemCommand::PublishWill`, so the willing client has already been evicted
+            // (for `clean_session=true`) and `dispatch()` returns early when it fails to
+            // look up the client. The non-TCE path still needs this to deliver the will
+            // locally.
+            dispatch(state, txn.into(), PublishOrigin::Local(willing_client))
+        }
 
         SystemCommand::EvictClient { client_index } => {
             state.evict_client(client_index);

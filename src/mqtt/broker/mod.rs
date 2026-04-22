@@ -152,6 +152,7 @@ struct ConnectionAcceptedResponse {
 struct Shared {
     password_hasher: PasswordHashingPool,
     users: UsersConfig,
+    permissions: Arc<PermissionsConfig>,
     broker_tx: mpsc::Sender<BrokerEvent>,
     tce_platform: Option<Arc<Platform>>,
     router: RouterHandle,
@@ -211,7 +212,9 @@ impl MqttBroker {
 
         let tce_platform = tce.as_ref().map(|tce| tce.platform.clone());
 
-        let router = MqttRouter::start(tce, token.clone(), permissions_config);
+        let permissions = Arc::new(permissions_config);
+
+        let router = MqttRouter::start(tce, token.clone(), permissions.clone());
 
         Ok(MqttBroker {
             listen_addr,
@@ -229,6 +232,7 @@ impl MqttBroker {
                     std::thread::available_parallelism().unwrap_or(NonZeroUsize::MIN),
                 ),
                 users,
+                permissions,
                 broker_tx: broker_tx.clone(),
                 tce_platform,
                 router: router.handle(),
