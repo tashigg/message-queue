@@ -394,8 +394,12 @@ describe("publish to node 1, receive from node2", () => {
         await remoteSub.subscribeAsync("cluster/sentinel", { qos: 1 });
 
         // Attempt a denied publish. QoS 1 so the broker must send back a PUBACK — if the ACL
-        // path is broken the client hangs here, which is itself a useful signal.
-        await publisher.publishAsync("blocked/secret", "should not leak", { qos: 1 });
+        // path is broken the client hangs here, which is itself a useful signal. The broker
+        // returns PubAckReason::NotAuthorized for this publish, which mqtt.js surfaces as a
+        // promise rejection; assert on it so we also pin the protocol-level rejection.
+        await expect(
+            publisher.publishAsync("blocked/secret", "should not leak", { qos: 1 })
+        ).rejects.toThrow(/Not authorized/);
 
         // Publish an allowed sentinel message. Once this has been delivered to both subscribers,
         // any message that was going to leak from the denied publish would also have arrived,
