@@ -364,4 +364,128 @@ describe("publish to node 1, receive from node2", () => {
             await client3.endAsync();
         })
         ;
+
+    test("denied publish does not leak across the cluster", async () => {
+        // Regression guard: with TCE active, a locally-originated publish used to skip the
+        // router's ACL check and fall straight into consensus, so a denied publish would
+        // reach subscribers on every *other* broker in the cluster. The fix rejects denied
+        // publishes in `connection.rs` before they enter consensus; this test asserts that
+        // nothing leaks to either the local or a remote subscriber.
+        //
+        // See `tests/foxmq.d/permissions.toml`: anonymous clients (the `*` fallback) can
+        // subscribe to `blocked/#` but are denied publish.
+
+        const publisher = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+        const localSub = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+        const remoteSub = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
+
+        const localMessages = [];
+        const remoteMessages = [];
+        localSub.on('message', (topic, message) => {
+            localMessages.push({ topic: topic.toString(), message: message.toString() });
+        });
+        remoteSub.on('message', (topic, message) => {
+            remoteMessages.push({ topic: topic.toString(), message: message.toString() });
+        });
+
+        await localSub.subscribeAsync("blocked/#", { qos: 1 });
+        await localSub.subscribeAsync("cluster/sentinel", { qos: 1 });
+        await remoteSub.subscribeAsync("blocked/#", { qos: 1 });
+        await remoteSub.subscribeAsync("cluster/sentinel", { qos: 1 });
+
+        // Attempt a denied publish. QoS 1 so the broker must send back a PUBACK — if the ACL
+        // path is broken the client hangs here, which is itself a useful signal. The broker
+        // returns PubAckReason::NotAuthorized for this publish, which mqtt.js surfaces as a
+        // promise rejection; assert on it so we also pin the protocol-level rejection.
+        await expect(
+            publisher.publishAsync("blocked/secret", "should not leak", { qos: 1 })
+        ).rejects.toThrow(/Not authorized/);
+
+        // Publish an allowed sentinel message. Once this has been delivered to both subscribers,
+        // any message that was going to leak from the denied publish would also have arrived,
+        // so we can safely assert no blocked/* message ever showed up.
+        await publisher.publishAsync("cluster/sentinel", "ok", { qos: 1 });
+
+        const waitForSentinel = async (messages, label) => {
+            const deadline = Date.now() + 5000;
+            while (Date.now() < deadline) {
+                if (messages.some((m) => m.topic === "cluster/sentinel")) return;
+                await timers.setTimeout(20);
+            }
+            throw new Error(`timed out waiting for sentinel on ${label}: ${JSON.stringify(messages)}`);
+        };
+        await waitForSentinel(localMessages, 'localSub');
+        await waitForSentinel(remoteMessages, 'remoteSub');
+
+        // Grace period for any in-flight (leaked) message to land — none should.
+        await timers.setTimeout(100);
+
+        const blockedLocal = localMessages.filter((m) => m.topic.startsWith("blocked/"));
+        const blockedRemote = remoteMessages.filter((m) => m.topic.startsWith("blocked/"));
+
+        expect(blockedLocal).toEqual([]);
+        expect(blockedRemote).toEqual([]);
+
+        await publisher.endAsync();
+        await localSub.endAsync();
+        await remoteSub.endAsync();
+    });
+
+    test("all brokers deliver a shared topic in identical order", async () => {
+        // With TCE active, every PUBLISH goes through consensus before any broker dispatches
+        // it, so subscribers on different brokers must observe the exact same sequence of
+        // messages. Two publishers on different brokers firing interleaved publishes pins
+        // the total-order invariant — any broker-local shortcut around TCE would almost
+        // certainly produce a different ordering on one side vs. the other.
+
+        const EXPECTED_MESSAGES = 20;
+
+        const publisherA = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+        const publisherB = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
+        const subscriberA = await mqtt.connectAsync("mqtt://localhost:1883", { protocolVersion: 5 });
+        const subscriberB = await mqtt.connectAsync("mqtt://localhost:1884", { protocolVersion: 5 });
+
+        const receivedA = [];
+        const receivedB = [];
+
+        const collectUntilFull = (client, sink) => new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                reject(new Error(`only received ${sink.length}/${EXPECTED_MESSAGES}: ${JSON.stringify(sink)}`));
+            }, 10000);
+            client.on('message', (_topic, payload) => {
+                sink.push(payload.toString());
+                if (sink.length === EXPECTED_MESSAGES) {
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            });
+        });
+
+        const doneA = collectUntilFull(subscriberA, receivedA);
+        const doneB = collectUntilFull(subscriberB, receivedB);
+
+        await subscriberA.subscribeAsync("ordering/test", { qos: 1 });
+        await subscriberB.subscribeAsync("ordering/test", { qos: 1 });
+
+        // Fire interleaved publishes concurrently from both brokers.
+        const publishes = [];
+        for (let i = 0; i < EXPECTED_MESSAGES; i++) {
+            const client = i % 2 === 0 ? publisherA : publisherB;
+            publishes.push(client.publishAsync("ordering/test", `msg-${i}`, { qos: 1 }));
+        }
+        await Promise.all(publishes);
+
+        await Promise.all([doneA, doneB]);
+
+        // The exact interleaving is up to TCE — what matters is that every broker produces
+        // the same interleaving. This is the core property `fix: enforce total message
+        // ordering via TCE for all clients` is supposed to guarantee.
+        expect(receivedB).toEqual(receivedA);
+        expect(receivedA).toHaveLength(EXPECTED_MESSAGES);
+
+        await publisherA.endAsync();
+        await publisherB.endAsync();
+        await subscriberA.endAsync();
+        await subscriberB.endAsync();
+    }, 30000);
 });

@@ -82,7 +82,7 @@ impl MqttRouter {
     pub fn start(
         tce: Option<TceState>,
         token: CancellationToken,
-        permissions: PermissionsConfig,
+        permissions: Arc<PermissionsConfig>,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_CAPACITY);
 
@@ -344,7 +344,7 @@ struct RouterState {
     clients: SecondaryMap<ClientIndex, ClientState>,
     dead_clients: HashSet<ClientIndex>,
 
-    permissions: PermissionsConfig,
+    permissions: Arc<PermissionsConfig>,
 
     subscriptions: Subscriptions,
     command_rx: mpsc::Receiver<(ClientIndex, RouterCommand)>,
@@ -629,7 +629,17 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
         }
         RouterCommand::Transaction(txn) => match txn.data {
             TransactionData::Publish(publish) => {
-                dispatch(state, publish.into(), PublishOrigin::Local(client_idx))
+                // When TCE is active, don't dispatch locally — wait for the
+                // message to come back through consensus so that all clients
+                // see messages in the same total order.
+                if state.tce.is_none() {
+                    dispatch(
+                        state,
+                        publish.into(),
+                        PublishOrigin::Local(client_idx),
+                        None,
+                    );
+                }
             }
             TransactionData::AddNode(add_node) => {
                 // This really shouldn't be called from here, but there's little harm in doing it.
@@ -684,6 +694,7 @@ fn handle_command(state: &mut RouterState, client_idx: ClientIndex, command: Rou
 fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: SubscribeRequest) {
     struct RetainedMessage {
         filter_qos: QoS,
+        consensus_timestamp: Option<u64>,
         publish: Arc<PublishTrasaction>,
     }
 
@@ -741,10 +752,12 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
                         state.retained_messages.visit_matches(
                             sub_entry.filter(),
                             |timestamp, index, publish| {
+                                let consensus_timestamp = state.tce.as_ref().map(|_| timestamp);
                                 let entry = retained_messages
                                     .entry((timestamp, index))
                                     .or_insert_with(|| RetainedMessage {
                                         filter_qos,
+                                        consensus_timestamp,
                                         publish: publish.clone(),
                                     });
 
@@ -795,6 +808,7 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
             true,
             request.sub_id,
             request.include_broker_timestamps,
+            message.consensus_timestamp,
             message.publish,
         );
 
@@ -805,8 +819,7 @@ fn handle_subscribe(state: &mut RouterState, client_idx: ClientIndex, request: S
 }
 
 fn handle_message(state: &mut RouterState, message: Message) {
-    if let Some(tce) = state.tce.as_ref() {
-        let tce_platform = tce.platform.clone();
+    if state.tce.is_some() {
         match message {
             Message::SyncPoint(sync_point) => {
                 // TODO: handle sync points
@@ -814,14 +827,14 @@ fn handle_message(state: &mut RouterState, message: Message) {
                 tracing::debug!(?sync_point, "received sync point");
             }
             Message::Event(event) => {
-                handle_tce_event(state, event, &tce_platform);
+                handle_tce_event(state, event);
             }
         }
     }
 }
 
 #[tracing::instrument(skip_all, fields(creator=%event.creator, timestamp=event.timestamp_created()))]
-fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Platform) {
+fn handle_tce_event(state: &mut RouterState, event: PlatformEvent) {
     let Some(consensus_timestamp) = event.timestamp_finalized else {
         return;
     };
@@ -851,14 +864,14 @@ fn handle_tce_event(state: &mut RouterState, event: PlatformEvent, platform: &Pl
             TransactionData::Publish(publish) => {
                 let publish = Arc::new(publish);
 
-                if &event.creator != platform.creator_id() {
-                    // Locally sent messages would have been dispatched directly
-                    dispatch(
-                        state,
-                        publish.clone(),
-                        PublishOrigin::Consensus(&event.creator),
-                    );
-                }
+                // All messages (including our own) are dispatched from
+                // the consensus handler to guarantee total ordering.
+                dispatch(
+                    state,
+                    publish.clone(),
+                    PublishOrigin::Consensus(&event.creator),
+                    Some(consensus_timestamp),
+                );
 
                 // Only for TCE messages because we need to have total ordering
                 // to know which retained message is the latest for a given topic.
@@ -904,13 +917,28 @@ fn handle_system_command(state: &mut RouterState, command: SystemCommand) {
         }
 
         SystemCommand::Publish { source, txn } => {
-            dispatch(state, txn.into(), PublishOrigin::System { source });
+            dispatch(state, txn.into(), PublishOrigin::System { source }, None);
         }
 
         SystemCommand::PublishWill {
             txn,
             willing_client,
-        } => dispatch(state, txn.into(), PublishOrigin::Local(willing_client)),
+        } => {
+            // When TCE is active this local dispatch is effectively a no-op: the will is
+            // delivered through the consensus path (see `handle_tce_event`) for all brokers
+            // in the cluster, including ours. `handle_connection_lost` in the broker task
+            // sends `SystemCommand::Disconnected` on this same `system_tx` channel *before*
+            // `SystemCommand::PublishWill`, so the willing client has already been evicted
+            // (for `clean_session=true`) and `dispatch()` returns early when it fails to
+            // look up the client. The non-TCE path still needs this to deliver the will
+            // locally.
+            dispatch(
+                state,
+                txn.into(),
+                PublishOrigin::Local(willing_client),
+                None,
+            )
+        }
 
         SystemCommand::EvictClient { client_index } => {
             state.evict_client(client_index);
@@ -979,7 +1007,12 @@ fn handle_add_node(state: &mut RouterState, add_node: AddNodeTransaction, from_c
 // `PublishTransaction` wrapped in `Arc` for cheap clones.
 // This is a potential candidate for `triomphe::Arc` but `PublishTransaction` is so large
 // that it dwarfs the extra machine word for the weak count.
-fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: PublishOrigin<'_>) {
+fn dispatch(
+    state: &mut RouterState,
+    publish: Arc<PublishTrasaction>,
+    origin: PublishOrigin<'_>,
+    consensus_timestamp: Option<u64>,
+) {
     // TODO: statically ensure `topic` is valid in `PublishTransaction`
     let topic = match TopicName::parse(&publish.topic) {
         Ok(topic) => topic,
@@ -1108,6 +1141,7 @@ fn dispatch(state: &mut RouterState, publish: Arc<PublishTrasaction>, origin: Pu
                 sub.props.preserve_retain && publish.meta.retain(),
                 sub.id,
                 sub.include_broker_timestamps,
+                consensus_timestamp,
                 publish.clone(),
             );
 

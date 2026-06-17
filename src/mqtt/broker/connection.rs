@@ -54,6 +54,11 @@ pub struct Connection<S: MqttSocket> {
 
     client_id: Option<ClientId>,
     client_index: Option<ClientIndex>,
+    /// The username the client authenticated as, or empty for anonymous logins.
+    ///
+    /// Set alongside `client_id` after `CONNECT` is validated and used to look
+    /// up publish ACLs on subsequent `PUBLISH` packets.
+    user: String,
     keep_alive: KeepAlive,
 
     protocol: DynProtocol,
@@ -127,6 +132,7 @@ impl<S: MqttSocket> Connection<S> {
             id,
             client_id: None,
             client_index: None,
+            user: String::new(),
             keep_alive: KeepAlive::default(),
             // This doesn't actually matter until after we read the CONNECT packet.
             protocol: DynProtocol::V5,
@@ -418,6 +424,7 @@ impl<S: MqttSocket> Connection<S> {
                 Some(mail.packet_id),
                 &mail.subscription_ids,
                 mail.include_broker_timestamps,
+                mail.consensus_timestamp,
             ))
             .await?;
 
@@ -431,6 +438,7 @@ impl<S: MqttSocket> Connection<S> {
                 None,
                 mail.subscription_ids(),
                 mail.include_broker_timestamps,
+                mail.consensus_timestamp,
             ))
             .await?;
         }
@@ -572,6 +580,7 @@ impl<S: MqttSocket> Connection<S> {
 
         self.client_id = Some(client_id);
         self.client_index = Some(response.client_index);
+        self.user = user.clone();
 
         let session_present = if let Some(existing_session) = response.session {
             *store = existing_session;
@@ -680,16 +689,14 @@ impl<S: MqttSocket> Connection<S> {
             );
         }
 
-        let transaction = match publish::validate_and_convert(
+        let publish_txn = match publish::validate_and_convert(
             publish,
             publish_props,
             TOPIC_ALIAS_MAX,
             &mut self.client_topic_aliases,
         ) {
-            // `transaction` is validated and its topic alias has been resolved (if applicable)
-            Ok(transaction) => Transaction {
-                data: TransactionData::Publish(transaction),
-            },
+            // `publish_txn` is validated and its topic alias has been resolved (if applicable)
+            Ok(publish_txn) => publish_txn,
             Err(ValidateError::Disconnect(disconnect)) => {
                 return self
                     .disconnect(
@@ -714,6 +721,59 @@ impl<S: MqttSocket> Connection<S> {
 
                 return Ok(());
             }
+        };
+
+        // Enforce the publish ACL here, before the transaction enters consensus.
+        //
+        // If we let a denied publish through to TCE, it would reach subscribers on every other
+        // broker in the cluster (which bypasses the router's ACL check, since that only fires
+        // for `PublishOrigin::Local`). Rejecting here also ensures the publishing client gets
+        // `NotAuthorized` back instead of `Success`.
+        let topics_config = self.shared.permissions.get_topics_acl_config(&self.user);
+        let publish_allowed = self.shared.permissions.check_acl_config(
+            topics_config,
+            &publish_txn.topic,
+            crate::config::permissions::TransactionType::Publish,
+        );
+
+        if !publish_allowed {
+            tracing::debug!(
+                topic = %publish_txn.topic,
+                user = %self.user,
+                "denying publish: user is not authorized for this topic"
+            );
+
+            match qos {
+                QoS::AtMostOnce => {
+                    // No response is specified for QoS 0 failures.
+                }
+                QoS::AtLeastOnce => {
+                    self.send(Packet::PubAck(
+                        PubAck {
+                            pkid,
+                            reason: PubAckReason::NotAuthorized,
+                        },
+                        None,
+                    ))
+                    .await?;
+                }
+                QoS::ExactlyOnce => {
+                    self.send(Packet::PubRec(
+                        PubRec {
+                            pkid,
+                            reason: PubRecReason::NotAuthorized,
+                        },
+                        None,
+                    ))
+                    .await?;
+                }
+            }
+
+            return Ok(());
+        }
+
+        let transaction = Transaction {
+            data: TransactionData::Publish(publish_txn),
         };
 
         tracing::trace!("submitting transaction: {transaction:?}");
