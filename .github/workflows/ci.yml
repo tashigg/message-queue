@@ -342,7 +342,7 @@ jobs:
         with:
           path: tmq
 
-      # Creates a token with which we can use to read to/write from `tashigg/foxmq`.
+      # Creates a token with which we can use to read to/write from `tashigit/foxmq`.
       - name: Create Deploy Token
         id: create-token
         uses: actions/create-github-app-token@v1
@@ -365,7 +365,7 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
         with:
-          repository: tashigg/foxmq
+          repository: tashigit/foxmq
           token: ${{ steps.create-token.outputs.token }}
           path: foxmq
 
@@ -423,10 +423,10 @@ jobs:
           zip -j foxmq_${{ inputs.release-version }}_windows-amd64.zip foxmq_${{ inputs.release-version }}_windows-amd64/*
           zip -j foxmq_${{ inputs.release-version }}_linux-amd64.zip foxmq_${{ inputs.release-version }}_linux-amd64/*
 
-      - name: Create a tashigg/foxmq Draft Release
+      - name: Create a tashigit/foxmq Draft Release
         uses: ncipollo/release-action@v1
         with:
-          owner: tashigg
+          owner: tashigit
           repo: foxmq
           draft: true
           artifactErrorsFailBuild: true
@@ -454,11 +454,11 @@ jobs:
 
       - name: Build Docker Image
         run: | # Since the image is so simple, we can just supply the Dockerfile inline and not have to check out.
-          docker build -t ghcr.io/tashigg/foxmq:${{ inputs.release-version }} -f - . <<- EOF          
+          docker build -t ghcr.io/tashigit/foxmq:${{ inputs.release-version }} -f - . <<- EOF          
             # Not exactly the same environment as our builders, but we just need glibc mostly.
             FROM debian:bookworm-slim
           
-            LABEL org.opencontainers.image.source="https://github.com/tashigg/foxmq" 
+            LABEL org.opencontainers.image.source="https://github.com/tashigit/foxmq" 
           
             COPY --chmod=555 foxmq_${{ inputs.release-version }}_linux-amd64/foxmq /usr/local/bin/foxmq
           
@@ -467,6 +467,6 @@ jobs:
 
       - name: Push Docker Image
         run: |
-          docker tag ghcr.io/tashigg/foxmq:${{ inputs.release-version }} ghcr.io/tashigg/foxmq:latest
-          docker push ghcr.io/tashigg/foxmq:${{ inputs.release-version }}
-          docker push ghcr.io/tashigg/foxmq:latest
+          docker tag ghcr.io/tashigit/foxmq:${{ inputs.release-version }} ghcr.io/tashigit/foxmq:latest
+          docker push ghcr.io/tashigit/foxmq:${{ inputs.release-version }}
+          docker push ghcr.io/tashigit/foxmq:latest

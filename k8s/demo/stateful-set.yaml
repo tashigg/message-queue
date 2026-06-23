@@ -113,7 +113,7 @@ spec:
 
       containers:
         - name: foxmq
-          image: ghcr.io/tashigg/foxmq:0.3.0
+          image: ghcr.io/tashigit/foxmq:0.3.0
 
           env:
             - name: RUST_LOG
