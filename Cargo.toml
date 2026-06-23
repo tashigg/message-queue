@@ -11,13 +11,13 @@ features = ["full"]
 
 [package]
 name = "foxmq"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 publish = false
 default-run = "foxmq"
 
 [dependencies.tashi-consensus-engine]
-git = "ssh://git@github.com/tashigg/tashi-consensus-engine"
+git = "ssh://git@github.com/tashigit/tashi-consensus-engine"
 rev = "aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
 
 [dependencies]

@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "foxmq"
-version = "0.3.0"
+version = "0.3.2"
 dependencies = [
  "arbitrary",
  "argon2",
@@ -2009,7 +2009,7 @@ dependencies = [
 [[package]]
 name = "tashi-collections"
 version = "0.3.0"
-source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=aaf0206f2a71c710bafe6c5c89f172e5fae2b277#aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
+source = "git+ssh://git@github.com/tashigit/tashi-consensus-engine?rev=aaf0206f2a71c710bafe6c5c89f172e5fae2b277#aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
 dependencies = [
  "fnv",
  "hashbrown",
@@ -2018,7 +2018,7 @@ dependencies = [
 [[package]]
 name = "tashi-consensus-engine"
 version = "0.3.0"
-source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=aaf0206f2a71c710bafe6c5c89f172e5fae2b277#aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
+source = "git+ssh://git@github.com/tashigit/tashi-consensus-engine?rev=aaf0206f2a71c710bafe6c5c89f172e5fae2b277#aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
 dependencies = [
  "bytes",
  "der",
@@ -2056,7 +2056,7 @@ dependencies = [
 [[package]]
 name = "tashi-crypto"
 version = "0.3.0"
-source = "git+ssh://git@github.com/tashigg/tashi-consensus-engine?rev=aaf0206f2a71c710bafe6c5c89f172e5fae2b277#aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
+source = "git+ssh://git@github.com/tashigit/tashi-consensus-engine?rev=aaf0206f2a71c710bafe6c5c89f172e5fae2b277#aaf0206f2a71c710bafe6c5c89f172e5fae2b277"
 dependencies = [
  "der",
  "eyre",
