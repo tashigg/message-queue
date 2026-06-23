@@ -46,16 +46,22 @@ fi
 
 echo -e "\033[1m :: Detected Host OS: $OS_TYPE \033[0m"
 
+# Binaries successfully built in THIS run, as "src:platform" entries. Only
+# these get packaged, so stale artifacts from a prior run are never shipped.
+BUILT_ARTIFACTS=()
+
 build_linux_x86() {
     echo -e "\033[1m :: Building for Linux x86_64 \033[0m"
     rustup target add x86_64-unknown-linux-gnu
     cargo zigbuild --target x86_64-unknown-linux-gnu --release -p foxmq
+    BUILT_ARTIFACTS+=("target/x86_64-unknown-linux-gnu/release/foxmq:linux-amd64")
 }
 
 build_windows() {
     echo -e "\033[1m :: Building for Windows x86_64 \033[0m"
     rustup target add x86_64-pc-windows-gnu
     cargo zigbuild --target x86_64-pc-windows-gnu --release -p foxmq
+    BUILT_ARTIFACTS+=("target/x86_64-pc-windows-gnu/release/foxmq.exe:windows-amd64")
 }
 
 build_macos_universal() {
@@ -63,6 +69,7 @@ build_macos_universal() {
         echo -e "\033[1m :: Building macOS universal (arm64 + x86_64) \033[0m"
         rustup target add aarch64-apple-darwin x86_64-apple-darwin
         cargo zigbuild --target universal2-apple-darwin --release -p foxmq
+        BUILT_ARTIFACTS+=("target/universal2-apple-darwin/release/foxmq:macos-universal")
     else
         echo -e "\033[33m :: Skipping macOS build (Incompatible Host) \033[0m"
     fi
@@ -123,9 +130,9 @@ package() {
     fi
 }
 
-package "target/x86_64-unknown-linux-gnu/release/foxmq"     "linux-amd64"
-package "target/x86_64-pc-windows-gnu/release/foxmq.exe"    "windows-amd64"
-package "target/universal2-apple-darwin/release/foxmq"      "macos-universal"
+for entry in "${BUILT_ARTIFACTS[@]}"; do
+    package "${entry%%:*}" "${entry##*:}"
+done
 
 echo -e "\033[1m :: Done. Artifacts in ./$DIST_DIR: \033[0m"
 ls -1 "$DIST_DIR"
